@@ -1,42 +1,30 @@
 import ee
 import streamlit as st
 import json
-import os
 
 def inicializar_gee():
-    # Si ya está inicializado
     try:
         ee.Number(1).getInfo()
         return
     except Exception:
         pass
 
-    # Detectar Streamlit Cloud (forma segura)
-    is_cloud = os.getenv("STREAMLIT_CLOUD") == "true"
-
+    # Estrategia: Intentar usar secrets primero (Cloud), si falla, usar default (Local)
     try:
-        if is_cloud:
-            try:
-                secrets = st.secrets
-                has_secrets = True
-            except Exception:
-                has_secrets = False
-
-            if has_secrets and "gcp_service_account" in secrets:
-                json_creds = secrets["gcp_service_account"]
-                info = json.loads(json_creds)
-
-                credentials = ee.ServiceAccountCredentials(
-                    info["client_email"],
-                    key_data=json_creds
-                )
-                ee.Initialize(credentials)
-            else:
-                raise RuntimeError("Secrets no encontrados en Streamlit Cloud")
-
+        if "gcp_service_account" in st.secrets:
+            json_creds = st.secrets["gcp_service_account"]
+            info = json.loads(json_creds)
+            credentials = ee.ServiceAccountCredentials(
+                info["client_email"],
+                key_data=json_creds
+            )
+            ee.Initialize(credentials)
         else:
             ee.Initialize()
-
+            
     except Exception as e:
-        st.error(f"❌ Error inicializando GEE: {e}")
-        raise
+        if "credentials" in str(e).lower() or "authorize" in str(e).lower():
+            st.error("❌ Error de Autenticación: Si estás en la nube, configura 'gcp_service_account' en Secrets. Si es local, corre 'earthengine authenticate'.")
+        else:
+            st.error(f"❌ Error crítico: {e}")
+        st.stop()
