@@ -3,12 +3,19 @@ import streamlit as st
 import json
 
 def inicializar_gee():
-    # En la nube usamos las credenciales guardadas en Secrets
-    if not ee.data._authorized:
-        # Obtenemos el JSON de los secretos de Streamlit
-        info = json.loads(st.secrets["gcp_service_account"])
-        credentials = ee.ServiceAccountCredentials(info['client_email'], key_data=st.secrets["gcp_service_account"])
-        ee.Initialize(credentials)
+    try:
+        if not ee.data._authorized:
+            # Lee el JSON desde los Secrets de Streamlit
+            key_dict = json.loads(st.secrets["gcp_service_account"])
+            
+            # Autentica usando la Service Account
+            credentials = ee.ServiceAccountCredentials(
+                key_dict['client_email'], 
+                key_data=st.secrets["gcp_service_account"]
+            )
+            ee.Initialize(credentials)
+    except Exception as e:
+        st.error(f"Error de autenticación GEE: {e}")
 
 def leer_stats_procesadas(nombre_asset):
     inicializar_gee()
