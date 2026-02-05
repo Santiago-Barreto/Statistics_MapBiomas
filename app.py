@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import gee_utils
-
+gee_utils.inicializar_gee()
 # --------------------------------------------
 # CONFIGURACIÓN GENERAL
 # --------------------------------------------
@@ -45,7 +45,11 @@ st.sidebar.caption("MapBiomas Colombia – Colección 4")
 @st.cache_data(show_spinner=False)
 def cargar_version(region_id, version):
     asset_name = f"{region_id}_{version}"
-    data = gee_utils.leer_stats_procesadas(asset_name)
+    try:
+        data = gee_utils.leer_stats_procesadas(asset_name)
+    except Exception:
+        return None
+
     if not data:
         return None
 
