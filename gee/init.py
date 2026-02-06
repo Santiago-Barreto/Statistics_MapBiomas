@@ -1,26 +1,35 @@
+"""
+Módulo de Autenticación e Inicialización - MapBiomas Colombia
+Gestiona la conexión segura con los servidores de Google Earth Engine, 
+soportando autenticación por cuenta de servicio (nube) o credenciales de usuario (local).
+"""
+
 import ee
 import streamlit as st
 import json
 
 def inicializar_gee():
+    """
+    Verifica e inicializa la sesión de Google Earth Engine.
+    
+    Busca credenciales en Streamlit Secrets bajo la clave 'gcp_service_account'.
+    Si fallan o no existen, intenta la inicialización estándar del entorno.
+    """
     try:
         ee.Number(1).getInfo()
         return
     except Exception:
         pass
 
-    # 1. Intentar obtener credenciales de st.secrets (Cloud)
     json_creds = None
     try:
         if "gcp_service_account" in st.secrets:
             json_creds = st.secrets["gcp_service_account"]
     except Exception:
-        # En local, si no hay archivo secrets.toml, st.secrets lanza excepción
         pass
 
     try:
         if json_creds:
-            # Caso: Streamlit Cloud o Local con secrets.toml
             info = json.loads(json_creds)
             credentials = ee.ServiceAccountCredentials(
                 info["client_email"],
@@ -28,7 +37,6 @@ def inicializar_gee():
             )
             ee.Initialize(credentials)
         else:
-            # Caso: Local sin secrets (usa autenticación de gcloud/earthengine)
             ee.Initialize()
             
     except Exception as e:

@@ -1,84 +1,65 @@
+"""
+Módulo Principal - MapBiomas Dashboard Colombia
+Aplicación Streamlit para la visualización de estadísticas 
+y comparación de clasificaciones de cobertura, tanto filtros como clasificación base.
+"""
+
 import streamlit as st
 from gee.init import inicializar_gee
-from gee.assets import listar_versiones_disponibles, leer_stats_procesadas
-from data.processing import construir_dataframe
-from ui.charts import plot_temporal_series, render_metrics
+from data.processing import cargar_datos_totales
+from ui.sidebar import render_sidebar
+from ui.components import render_header_metrics
+from ui.map import render_visual_inspector
+from ui.charts import render_dashboard_view, render_graphs_only_view, render_combined_view
 
-st.set_page_config(page_title="MapBiomas Dashboard", layout="wide", page_icon="🌱")
-inicializar_gee()
+def main():
+    """
+    Controla el flujo de ejecución de la plataforma:
+    1. Inicializa servicios (GEE).
+    2. Gestiona el estado de la sesión.
+    3. Renderiza componentes de UI y lógica de visualización.
+    """
+    
+    st.set_page_config(
+        page_title="MapBiomas Dashboard", 
+        layout="wide", 
+        page_icon="🌱"
+    )
 
-st.title("🌱 Estadísticas MapBiomas")
+    inicializar_gee()
 
-# ---------------- Sidebar ----------------
-with st.sidebar:
-    st.header("Configuración")
-    region_id = st.text_input("ID de Región", value="R30205")
+    if "thumbnails" not in st.session_state:
+        st.session_state.thumbnails = None
 
-    versiones_disponibles = sorted(listar_versiones_disponibles(region_id))
+    region_id, version_sel, modo_vista = render_sidebar()
 
-    if not versiones_disponibles:
-        st.warning("No se hallaron versiones.")
+    st.title("🌱 Estadísticas MapBiomas Colombia: C4")
+    
+    if not version_sel:
+        st.info("💡 Selecciona versiones en el panel lateral.")
         st.stop()
 
-    version_sel = st.multiselect(
-        "Seleccionar Versiones",
-        options=versiones_disponibles,
-        default=versiones_disponibles[:1]
-    )
+    data_dict = cargar_datos_totales( version_sel)
 
-    modo_vista = st.radio(
-        "Modo de visualización",
-        ["Completo", "Solo gráficas"],
-        horizontal=True
-    )
+    if not data_dict:
+        st.error("Error al procesar datos.")
+        st.stop()
 
-# ---------------- Data loader ----------------
-@st.cache_data(show_spinner=False)
-def cargar_por_version(region, lista_versiones):
-    data = {}
-    for v in lista_versiones:
-        raw = leer_stats_procesadas(f"{region}_{v}")
-        df = construir_dataframe(raw, v)
-        if df is not None and not df.empty:
-            data[v] = df
-    return data
+    render_header_metrics(region_id, data_dict)
+    render_visual_inspector(region_id, version_sel, data_dict)
 
-# ---------------- Main ----------------
-if not version_sel:
-    st.info("Selecciona al menos una versión en el panel izquierdo.")
-    st.stop()
+    st.divider()
 
-data_por_version = cargar_por_version(region_id, version_sel)
+    vistas = {
+    "Dashboard Completo": render_dashboard_view,
+    "Solo Gráficas": render_graphs_only_view,
+    "Comparativa Combinada": render_combined_view
+    }
 
-if not data_por_version:
-    st.error("No hay datos para las versiones seleccionadas.")
-    st.stop()
+    render_func = vistas.get(modo_vista)
+    if render_func:
+        render_func(data_dict, region_id)
 
-# ================= MODO COMPLETO =================
-if modo_vista == "Completo":
-    tabs = st.tabs([f"Versión {v}" for v in data_por_version])
-
-    for tab, (v, df) in zip(tabs, data_por_version.items()):
-        with tab:
-            with st.spinner(f"Cargando versión {v}..."):
-                st.caption(f"📅 Años disponibles: {df['year'].nunique()}")
-
-                with st.expander("📊 Métricas", expanded=False):
-                    render_metrics(df)
-
-                plot_temporal_series(df, region_id)
-
-                with st.expander("🧾 Tabla de datos"):
-                    st.dataframe(
-                        df.sort_values("year"),
-                        width="stretch"
-                    )
-
-# ================= SOLO GRÁFICAS =================
-elif modo_vista == "Solo gráficas":
-    st.subheader("📈 Comparación visual por versión")
-
-    for v, df in data_por_version.items():
-        with st.spinner(f"Cargando gráfica {v}..."):
-            st.markdown(f"### 🌱 Versión {v}")
-            plot_temporal_series(df, region_id)
+if __name__ == "__main__":
+    
+    main()
