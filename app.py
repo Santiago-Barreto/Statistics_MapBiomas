@@ -12,6 +12,7 @@ from ui.components import render_header_metrics
 from ui.map import render_visual_inspector
 from ui.charts import render_dashboard_view, render_graphs_only_view, render_combined_view
 
+
 def main():
     """
     Controla el flujo de ejecución de la plataforma:
@@ -25,7 +26,6 @@ def main():
         layout="wide", 
         page_icon="🌱"
     )
-
     inicializar_gee()
 
     if "thumbnails" not in st.session_state:

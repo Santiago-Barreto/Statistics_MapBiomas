@@ -61,7 +61,8 @@ def get_thumbnail_url(_geom, year, asset_version):
             "dimensions": 512,
             "format": "png"
         })
-    except Exception:
+    except Exception as e:
+        st.sidebar.error(f"Error en GEE: {e}") # Esto te dirá el error real en la app
         return None
     
 def render_visual_inspector(region_id, version_sel, data_dict):
@@ -98,7 +99,8 @@ def render_visual_inspector(region_id, version_sel, data_dict):
                 )
     with c_btn:
         st.write(" ") 
-        if st.button("👁️ Comparar T-1 / T / T+1", width='stretch'):
+        if st.button("🔍 Comparar T-1 · T · T+1", use_container_width=True):
+
             with st.spinner(f"Generando vistas para {año_ver}..."):
                 geom = obtener_region_geom(region_id)
                 anios = [año_ver - 1, año_ver, año_ver + 1]
