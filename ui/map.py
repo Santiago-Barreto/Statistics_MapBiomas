@@ -26,7 +26,8 @@ def obtener_region_geom(region_id):
         ee.Filter.eq("id_regionC", clean_id)
     ).geometry()
 
-@st.cache_data(show_spinner=False)
+'''@st.cache_data(show_spinner=False)
+'''
 def get_thumbnail_url(_geom, year, asset_version):
     """
     Genera una URL de miniatura para una clasificación anual específica.
