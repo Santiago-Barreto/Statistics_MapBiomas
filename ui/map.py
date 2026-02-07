@@ -107,7 +107,8 @@ def render_visual_inspector(region_id, version_sel, data_dict):
                 anios = [año_ver - 1, año_ver, año_ver + 1]
                 st.session_state.thumbnails = {
                     "año": año_ver,
-                    "items": [(y, get_thumbnail_url(geom, y, v_mapa)) for y in anios]
+                    "items": [(y, get_thumbnail_url(geom, y, v_mapa)) if min_y <= y <= max_y else (y, None) 
+                        for y in anios]
                 }
 
     if st.session_state.thumbnails:
