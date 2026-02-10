@@ -50,10 +50,6 @@ def render_sidebar():
             options=["Dashboard Completo", "Solo Gráficas", "Comparativa Combinada"]
         )
         st.divider()
-
-        if st.button("🔄 Actualizar Datos GEE", use_container_width=True):
-            st.cache_data.clear()
-            st.toast("Actualizando datos desde GEE… las nuevas versiones aparecerán pronto.", icon="🛰️")
         
         
     return region_id, version_sel, modo
