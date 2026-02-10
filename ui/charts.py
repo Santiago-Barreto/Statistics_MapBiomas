@@ -39,6 +39,7 @@ def plot_temporal_series(df, region_id):
     """
     Genera gráficos interactivos con etiquetas reales en la leyenda.
     """
+    df = df.sort_values("year").reset_index(drop=True)
     cols_stats = [c for c in df.columns if c not in ["year", "version"]]
     color_map, label_map = obtener_configuracion_visual(cols_stats)
     
@@ -83,6 +84,7 @@ def render_combined_view(data_dict, region_id):
     df_unificado = fusionar_versiones(list(data_dict.values()))
     
     if df_unificado is not None:
+        df_unificado = df_unificado.sort_values(["version", "year"])
         render_metrics(df_unificado)
         plot_temporal_series(df_unificado, region_id)
         
