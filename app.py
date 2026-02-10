@@ -39,7 +39,10 @@ def main():
         st.info("💡 Selecciona versiones en el panel lateral.")
         st.stop()
 
-    data_dict = cargar_datos_totales( version_sel)
+    #data_dict = cargar_datos_totales( version_sel)
+
+    with st.spinner("⏳ Procesando estadísticas..."):
+        data_dict = cargar_datos_totales(version_sel)
 
     if not data_dict:
         st.error("Error al procesar datos.")
@@ -55,7 +58,6 @@ def main():
     "Solo Gráficas": render_graphs_only_view,
     "Comparativa Combinada": render_combined_view
     }
-
     render_func = vistas.get(modo_vista)
     if render_func:
         render_func(data_dict, region_id)

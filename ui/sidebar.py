@@ -18,6 +18,7 @@ def render_sidebar():
     with st.sidebar:
         st.header("Configuración")
         
+
         biomas = obtener_biomas()
         bioma_sel = st.selectbox("Seleccionar Bioma", biomas)
         regiones = regiones_por_bioma(bioma_sel)
@@ -48,5 +49,11 @@ def render_sidebar():
             label="Modo de visualización", 
             options=["Dashboard Completo", "Solo Gráficas", "Comparativa Combinada"]
         )
+        st.divider()
+
+        if st.button("🔄 Actualizar Datos GEE", use_container_width=True):
+            st.cache_data.clear()
+            st.toast("Buscando nuevas versiones, biomas y mundos en GEE...", icon="🛰️")
+        
         
     return region_id, version_sel, modo
