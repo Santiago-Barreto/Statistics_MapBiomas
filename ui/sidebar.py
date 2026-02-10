@@ -53,7 +53,7 @@ def render_sidebar():
 
         if st.button("🔄 Actualizar Datos GEE", use_container_width=True):
             st.cache_data.clear()
-            st.toast("Buscando nuevas versiones, biomas y mundos en GEE...", icon="🛰️")
+            st.toast("Actualizando datos desde GEE… las nuevas versiones aparecerán pronto.", icon="🛰️")
         
         
     return region_id, version_sel, modo

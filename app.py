@@ -39,8 +39,6 @@ def main():
         st.info("💡 Selecciona versiones en el panel lateral.")
         st.stop()
 
-    #data_dict = cargar_datos_totales( version_sel)
-
     with st.spinner("⏳ Procesando estadísticas..."):
         data_dict = cargar_datos_totales(version_sel)
 

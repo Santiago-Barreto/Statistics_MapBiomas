@@ -27,7 +27,7 @@ def regiones_por_bioma(bioma_nombre):
     filtro = regiones_fc.filter(ee.Filter.eq("bioma", bioma_nombre))
     return filtro.aggregate_array("id_regionC").sort().getInfo()
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=3600)
 def listar_versiones_disponibles(region_id):
     """
     Escanea el repositorio de GEE buscando assets que coincidan con el ID 
@@ -54,7 +54,8 @@ def listar_versiones_disponibles(region_id):
     except Exception as e:
         st.error(f"Error al listar assets en GEE: {e}")
         return []
-
+    
+@st.cache_data(show_spinner=False)
 def leer_stats_procesadas(asset_id):
     """
     nombre_asset ya contiene la ruta completa (ej. projects/mapbiomas.../R30205-V1)
