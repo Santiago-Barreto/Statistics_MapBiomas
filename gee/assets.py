@@ -1,73 +1,54 @@
 """
 Módulo de Gestión de Assets - MapBiomas Colombia
-Proporciona herramientas para interactuar con la infraestructura de datos de 
-Google Earth Engine, incluyendo el descubrimiento de regiones y versiones.
+Utiliza la base de datos local para alimentar la interfaz de usuario
 """
 
 import ee
-import os
 import re
-from config import ASSET_PARENT , ASSET_REGIONES
 import streamlit as st
+from data.db import get_conn
 
-@st.cache_data(show_spinner=False)
 def obtener_biomas():
     """
-    Retorna la lista de biomas únicos disponibles en el asset de regiones.
+    Retorna los biomas únicos registrados en la base de datos local.
     """
-    regiones_fc = ee.FeatureCollection(ASSET_REGIONES)
-    return regiones_fc.aggregate_array("bioma").distinct().sort().getInfo()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT bioma FROM assets WHERE bioma IS NOT NULL ORDER BY bioma ASC")
+    rows = cur.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
-@st.cache_data(show_spinner=False)
 def regiones_por_bioma(bioma_nombre):
     """
-    Filtra y retorna los IDs de las regiones que pertenecen a un bioma.
+    Retorna las regiones asociadas a un bioma específico desde la base de datos local.
     """
-    regiones_fc = ee.FeatureCollection(ASSET_REGIONES)
-    filtro = regiones_fc.filter(ee.Filter.eq("bioma", bioma_nombre))
-    return filtro.aggregate_array("id_regionC").sort().getInfo()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT region_id FROM assets WHERE bioma = ? ORDER BY region_id ASC", (bioma_nombre,))
+    rows = cur.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
-@st.cache_data(show_spinner=False, ttl=300)
 def listar_versiones_disponibles(region_id):
     """
-    Escanea el repositorio de GEE buscando assets que coincidan con el ID 
-    de la región, soportando formatos con prefijo 'R' o 'COLOMBIA-'.
-
-    Args:
-        region_id (str/int): Identificador de la región (ej. '30205' o 'R30205').
-
-    Returns:
-        list: Lista de rutas completas de los assets de estadísticas encontrados.
+    Consulta las versiones de assets disponibles para una región en la base de datos.
     """
-    clean_id = re.sub(r"\D", "", str(region_id))
-    
-    try:
-        folder_content = ee.data.listAssets({'parent': ASSET_PARENT})
-        assets = folder_content.get('assets', [])
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT asset_id FROM assets WHERE region_id = ? ORDER BY asset_id DESC", (str(region_id),))
+    rows = cur.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
-        pattern = re.compile(f"R{clean_id}|-{clean_id}")    
-
-        match = [
-            a['id'] for a in assets 
-            if pattern.search(a['id'])
-        ]
-        
-        return sorted(match, reverse=True)
-    
-    except Exception as e:
-        st.error(f"Error al listar assets en GEE: {e}")
-        return []
-    
-@st.cache_data(show_spinner=False)
 def leer_stats_procesadas(asset_id):
     """
-    nombre_asset ya contiene la ruta completa (ej. projects/mapbiomas.../R30205-V1)
+    Extrae datos crudos de GEE. Solo es llamada por el motor de sincronización.
     """
     try:
         fc = ee.FeatureCollection(asset_id)
         data = fc.getInfo()
-        
         return [f['properties'] for f in data.get('features', [])]
     except Exception as e:
-        print(f"Error leyendo asset: {e}")
+        print(f"Error leyendo asset en GEE: {e}")
         return []

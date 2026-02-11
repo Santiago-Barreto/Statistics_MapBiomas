@@ -1,7 +1,7 @@
 """
 Módulo de Autenticación e Inicialización - MapBiomas Colombia
 Gestiona la conexión segura con los servidores de Google Earth Engine, 
-soportando autenticación por cuenta de servicio (nube) o credenciales de usuario (local).
+soportando autenticación por cuenta de servicio o credenciales de usuario.
 """
 
 import ee
@@ -10,10 +10,9 @@ import json
 
 def inicializar_gee():
     """
-    Verifica e inicializa la sesión de Google Earth Engine.
-    
-    Busca credenciales en Streamlit Secrets bajo la clave 'gcp_service_account'.
-    Si fallan o no existen, intenta la inicialización estándar del entorno.
+    Verifica e inicializa la sesión de Google Earth Engine utilizando 
+    credenciales de cuenta de servicio desde secretos de Streamlit o 
+    inicialización estándar del entorno.
     """
     try:
         ee.Number(1).getInfo()
@@ -41,5 +40,4 @@ def inicializar_gee():
             
     except Exception as e:
         st.error(f"❌ Error de inicialización: {e}")
-        st.info("💡 Si es local: corre 'earthengine authenticate'. Si es Cloud: configura los Secrets.")
         st.stop()

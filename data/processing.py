@@ -1,55 +1,53 @@
 """
 Módulo de Procesamiento de Datos - MapBiomas Colombia
-Transforma datos crudos provenientes de Google Earth Engine en estructuras
-de Pandas DataFrame optimizadas para análisis y visualización.
+Transforma datos provenientes de la base de datos local o Google Earth Engine 
+en estructuras de Pandas DataFrame optimizadas para análisis y visualización.
 """
 
 import pandas as pd
-import streamlit as st
-from gee.assets import leer_stats_procesadas
-from concurrent.futures import ThreadPoolExecutor
+from data.db import get_conn
 
-@st.cache_data(show_spinner=False, ttl=120)
-def cargar_datos_totales(seleccion):
+def cargar_datos_totales(asset_ids):
     """
-    Carga y transforma múltiples assets de GEE.
-        Args:
-        region (str): Identificador de la región.
-        seleccion (list): Lista de rutas de assets seleccionados.
-            Returns:
-        dict: Diccionario de DataFrames indexados por el nombre de la versión.
+    Consulta la base de datos local para extraer estadísticas de área asociadas 
+    a los identificadores de asset proporcionados y retorna un diccionario 
+    de DataFrames estructurados.
     """
-    data = {}
-
-    def procesar_un_asset(v_asset):
-        raw = leer_stats_procesadas(v_asset)    
-        label = extraer_label_version(v_asset)
-        df = construir_dataframe(raw, label)
-        return label, df
-
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        resultados = list(executor.map(procesar_un_asset, seleccion))
+    if not asset_ids:
+        return {}
     
-    for label, df in resultados:
-        if df is not None and not df.empty:
-            data[label] = df
+    conn = get_conn()
+    placeholders = ','.join(['?'] * len(asset_ids))
+    query = f"SELECT asset_id, year, class_id, area_ha FROM stats WHERE asset_id IN ({placeholders})"
+    
+    df_raw = pd.read_sql(query, conn, params=asset_ids)
+    conn.close()
 
-    return data
+    if df_raw.empty:
+        return {}
+
+    data_dict = {}
+    for a_id in asset_ids:
+        label = extraer_label_version(a_id)
+        df_v = df_raw[df_raw['asset_id'] == a_id].copy()
+        
+        if not df_v.empty:
+            df_pivot = df_v.pivot(index='year', columns='class_id', values='area_ha').reset_index()
+            df_pivot['version'] = label
+            data_dict[label] = df_pivot
+
+    return data_dict
 
 def construir_dataframe(raw_data, version):
     """
-    Convierte una lista de diccionarios (GEE) en un DataFrame limpio.
-    Args:
-        raw_data (list): Datos crudos obtenidos de la API de GEE.
-        version (str): Etiqueta de la versión para identificar los datos. 
-    Returns:
-        pandas.DataFrame: DataFrame procesado o None si no hay datos.
+    Transforma una lista de diccionarios con metadatos de GEE en un 
+    DataFrame de Pandas con limpieza de columnas de sistema y normalización 
+    de identificadores de clase.
     """
     if not raw_data:
         return None
         
     df = pd.DataFrame(raw_data)
-    
     cols_drop = {'system:index', 'geo'}
     df = df.drop(columns=[c for c in cols_drop if c in df.columns])
     
@@ -59,7 +57,6 @@ def construir_dataframe(raw_data, version):
             nuevas_columnas[col] = col.split('_')[0]
             
     df = df.rename(columns=nuevas_columnas)
-    
     df['year'] = df['year'].astype(int)
     df['version'] = version
     
@@ -67,21 +64,14 @@ def construir_dataframe(raw_data, version):
 
 def fusionar_versiones(dfs):
     """
-    Concatena una lista de DataFrames en una única estructura tabular.
-    
-    Args:
-        dfs (list): Lista de pandas.DataFrames.
-        
-    Returns:
-        pandas.DataFrame: Estructura unificada o None.
+    Realiza la concatenación de múltiples estructuras DataFrame en una única 
+    tabla unificada para procesos de comparación multiversión.
     """
     return pd.concat(dfs, ignore_index=True, sort=False) if dfs else None
 
 def extraer_label_version(path):
     """
-    Función centralizada para limpiar nombres de assets de GEE.
-    Convierte 'projects/.../R30205-V11_stats' en 'R30205-V11'.
+    Extrae y normaliza la etiqueta final del asset a partir de su ruta 
+    completa en Google Earth Engine.
     """
     return path.split('/')[-1]
-
-
