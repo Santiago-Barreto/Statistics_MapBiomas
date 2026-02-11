@@ -50,6 +50,7 @@ def render_sidebar():
             options=["Dashboard Completo", "Solo Gráficas", "Comparativa Combinada"]
         )
         st.divider()
+        #st.sidebar.caption("🔄 Los datos se sincronizan automáticamente con GEE cada 2 minutos.")
         
         
     return region_id, version_sel, modo

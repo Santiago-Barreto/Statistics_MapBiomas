@@ -27,7 +27,7 @@ def regiones_por_bioma(bioma_nombre):
     filtro = regiones_fc.filter(ee.Filter.eq("bioma", bioma_nombre))
     return filtro.aggregate_array("id_regionC").sort().getInfo()
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def listar_versiones_disponibles(region_id):
     """
     Escanea el repositorio de GEE buscando assets que coincidan con el ID 

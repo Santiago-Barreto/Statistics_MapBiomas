@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 from gee.assets import leer_stats_procesadas
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=120)
 def cargar_datos_totales(seleccion):
     """
     Carga y transforma múltiples assets de GEE.
