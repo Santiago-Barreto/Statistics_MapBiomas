@@ -25,3 +25,6 @@ Thumbs.db
 
 # Datos/Caché
 .cache/
+
+data/*.db
+data/*.sqlite
