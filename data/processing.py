@@ -7,6 +7,7 @@ de Pandas DataFrame optimizadas para análisis y visualización.
 import pandas as pd
 import streamlit as st
 from gee.assets import leer_stats_procesadas
+from concurrent.futures import ThreadPoolExecutor
 
 @st.cache_data(show_spinner=False, ttl=120)
 def cargar_datos_totales(seleccion):
@@ -20,11 +21,16 @@ def cargar_datos_totales(seleccion):
     """
     data = {}
 
-    for v_asset in seleccion:
-        raw = leer_stats_procesadas(v_asset)
-        label = extraer_label_version(v_asset)      
+    def procesar_un_asset(v_asset):
+        raw = leer_stats_procesadas(v_asset)    
+        label = extraer_label_version(v_asset)
         df = construir_dataframe(raw, label)
+        return label, df
 
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        resultados = list(executor.map(procesar_un_asset, seleccion))
+    
+    for label, df in resultados:
         if df is not None and not df.empty:
             data[label] = df
 

@@ -43,14 +43,17 @@ def listar_versiones_disponibles(region_id):
     
     try:
         folder_content = ee.data.listAssets({'parent': ASSET_PARENT})
-        all_assets = [a['id'] for a in folder_content.get('assets', [])]
-        
+        assets = folder_content.get('assets', [])
+
+        pattern = re.compile(f"R{clean_id}|-{clean_id}")    
+
         match = [
-            a for a in all_assets 
-            if f"R{clean_id}" in a or f"-{clean_id}" in a
+            a['id'] for a in assets 
+            if pattern.search(a['id'])
         ]
         
-        return sorted(match)
+        return sorted(match, reverse=True)
+    
     except Exception as e:
         st.error(f"Error al listar assets en GEE: {e}")
         return []
