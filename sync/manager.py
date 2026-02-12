@@ -72,19 +72,29 @@ def sincronizar_todo_interno():
     for asset in remote_assets:
         a_id = asset['id']
         label = a_id.split('/')[-1]
-        region_id = label.split('-V')[0].replace('R', '')
+        label_norm = label.replace('-', '_')
+        region_id = label_norm.split('_V')[0].replace('R', '')
         bioma = bioma_dict.get(region_id, "Sin Bioma")
         
         cur.execute("INSERT OR REPLACE INTO assets VALUES (?, ?, ?, ?, ?)", 
-                   (a_id, region_id, bioma, label, int(time.time())))
+                    (a_id, region_id, bioma, label, int(time.time())))
         
         if a_id in new_assets:
             raw_data = leer_stats_procesadas(a_id)
             if raw_data:
-                rows = [(a_id, int(r.get('year', 0)), k.split('_')[0], float(v)) 
-                        for r in raw_data for k, v in r.items() 
-                        if k not in ['year', 'version', 'system:index']]
-                cur.executemany("INSERT OR REPLACE INTO stats VALUES (?, ?, ?, ?)", rows)
+                rows = []
+                for r in raw_data:
+                    year = int(r.get('year', 0))
+                    for k, v in r.items():
+                        k_norm = k.replace('-', '_')
+                        if k_norm not in ['year', 'version', 'system:index']:
+                            try:
+                                rows.append((a_id, year, k_norm.split('_')[0], float(v)))
+                            except (ValueError, TypeError):
+                                continue
+                
+                if rows:
+                    cur.executemany("INSERT OR REPLACE INTO stats VALUES (?, ?, ?, ?)", rows)
     
     conn.commit()
     conn.close()

@@ -1,17 +1,19 @@
 """
 Módulo de Formateo - MapBiomas Colombia
-Gestiona la transformación y orden cronológico de nombres técnicos con estética profesional.
+
+Normaliza y estandariza la visualización de assets, asegurando 
+un orden cronológico basado en versión y tipo de proceso.
 """
 
 import re
 
-
 def _extraer_clave_orden(asset_id):
     """
-    Retorna (region:int, version:int, es_derivado:int, sufijo:str) para orden cronológico.
+    Genera una clave de ordenamiento (Región, Versión, Tipo, Proceso).
+    Normaliza separadores para asegurar consistencia en la clasificación.
     """
-    label = asset_id.split("/")[-1]
-    match = re.match(r"R(\d+)-V(\d+)_?(.*)", label)
+    label = asset_id.split("/")[-1].replace('-', '_')
+    match = re.match(r"R(\d+)_V(\d+)_?(.*)", label)
 
     if not match:
         return (0, 0, 0, "")
@@ -20,7 +22,6 @@ def _extraer_clave_orden(asset_id):
     version = int(match.group(2))
     sufijo = match.group(3).lower()
 
-    # Priorizamos la versión base (0) sobre los derivados (1) como gapfill/filtros
     es_derivado = 1 if sufijo else 0
 
     return (region, version, es_derivado, sufijo)
@@ -28,19 +29,19 @@ def _extraer_clave_orden(asset_id):
 
 def formatear_nombre_humano(asset_id):
     """
-    Convierte 'R30205-V3_gapfill' en 'V3 ▹ Gapfill'
+    Transforma IDs técnicos en etiquetas legibles: 'V3 ▹ Mapa General'.
+    Soporta separadores mixtos (_ y -).
     """
-    label = asset_id.split("/")[-1]
-    match = re.search(r"-V(\d+)_?(.*)", label)
+    label = asset_id.split("/")[-1].replace('-', '_')
+    match = re.search(r"_V(\d+)_?(.*)", label)
 
     if not match:
-        return f"📦 {label}"
+        return label
 
     version = match.group(1)
     sufijo = match.group(2)
 
     if sufijo:
-        # Usamos un marcador sutil (▹) para procesos derivados
         nombre_proceso = sufijo.replace('_', ' ').title()
         return f"V{version} ▹ {nombre_proceso}"
 
@@ -49,18 +50,18 @@ def formatear_nombre_humano(asset_id):
 
 def categorizar_versiones(versiones_list):
     """
-    Ordena cronológicamente y devuelve el grupo de procesamiento.
+    Ordena la lista de assets cronológicamente y los agrupa para el sidebar.
     """
     ordenadas = sorted(versiones_list, key=_extraer_clave_orden)
 
     return {
-        "📋 Flujo de Trabajo": ordenadas
+        "📋 Secuencia de Procesamiento": ordenadas
     }
 
 
 def organizar_reporte_novedades(nombres_string):
     """
-    Organiza la cadena de assets nuevos por Región con iconos de ubicación.
+    Estructura el reporte de nuevos assets organizados por ID de región.
     """
     if not nombres_string:
         return {}
@@ -69,10 +70,10 @@ def organizar_reporte_novedades(nombres_string):
     reporte = {}
 
     for nombre in lista:
-        match_reg = re.search(r"R(\d+)", nombre)
+        label_norm = nombre.replace('-', '_')
+        match_reg = re.search(r"R(\d+)", label_norm)
         reg_id = match_reg.group(1) if match_reg else "General"
 
-        # Agregamos el icono de pin para las regiones en el reporte
         reporte.setdefault(reg_id, []).append(
             formatear_nombre_humano(nombre)
         )
