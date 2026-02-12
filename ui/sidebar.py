@@ -1,6 +1,6 @@
 """
 Módulo de Interfaz Lateral - MapBiomas Colombia
-Renderiza la configuración y el registro ordenado de sincronización.
+Renderiza la configuración, el registro de sincronización y herramientas de validación externa.
 """
 
 import streamlit as st
@@ -10,6 +10,9 @@ from sync.manager import obtener_resumen_sincro
 from ui.formatters import formatear_nombre_humano, categorizar_versiones, organizar_reporte_novedades
 
 def render_sidebar():
+    """
+    Renderiza los controles de navegación y herramientas adicionales en la barra lateral.
+    """
     with st.sidebar:
         st.header("Configuración")
 
@@ -19,7 +22,8 @@ def render_sidebar():
         region_id = st.selectbox("📍 Región", regiones)
 
         versiones_raw = listar_versiones_disponibles(region_id)
-        if not versiones_raw: st.stop()
+        if not versiones_raw: 
+            st.stop()
 
         st.subheader("Selección de Versiones")
         categorias = categorizar_versiones(versiones_raw)
@@ -34,6 +38,7 @@ def render_sidebar():
         
         st.divider()
         modo_vista = st.radio("Visualización", ["Dashboard Completo", "Solo Gráficas", "Comparativa Combinada"])
+        
         st.divider()
         
         ts, total, nombres_raw = obtener_resumen_sincro()
@@ -51,5 +56,17 @@ def render_sidebar():
                             st.write(f"- {i}")
         else:
             st.caption("🔄 Sincronización pendiente...")
+
+        st.divider()
+
+        st.subheader("Validación Externa")
+        st.info("Compara los resultados de la Colección 4 frente a la Colección 3 en el visor oficial (También puedes ver los limites entre regiones y biomas ;D)")
+        
+        st.link_button(
+            "🔍 Visor Comparativo C3 vs C4",
+            "https://mapbiomas-andesnorte.users.earthengine.app/view/coleccion4",
+            use_container_width=True,
+            help="Accede a la App de GEE para validación cruzada entre colecciones."
+        )
 
     return region_id, version_sel, modo_vista
