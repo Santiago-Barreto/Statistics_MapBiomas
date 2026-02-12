@@ -1,50 +1,80 @@
 """
 Módulo de Formateo - MapBiomas Colombia
-Gestiona la transformación y agrupación de nombres técnicos para la interfaz.
+Gestiona la transformación y orden cronológico de nombres técnicos con estética profesional.
 """
 
 import re
 
+
+def _extraer_clave_orden(asset_id):
+    """
+    Retorna (region:int, version:int, es_derivado:int, sufijo:str) para orden cronológico.
+    """
+    label = asset_id.split("/")[-1]
+    match = re.match(r"R(\d+)-V(\d+)_?(.*)", label)
+
+    if not match:
+        return (0, 0, 0, "")
+
+    region = int(match.group(1))
+    version = int(match.group(2))
+    sufijo = match.group(3).lower()
+
+    # Priorizamos la versión base (0) sobre los derivados (1) como gapfill/filtros
+    es_derivado = 1 if sufijo else 0
+
+    return (region, version, es_derivado, sufijo)
+
+
 def formatear_nombre_humano(asset_id):
-    """Convierte 'R30205-V3_gapfill' en 'V3 - Gapfill'."""
-    label = asset_id.split('/')[-1]
-    match = re.search(r"-(V\d+.*)", label)
-    if match:
-        return match.group(1).replace('_', ' - ').replace('-', ' ').title()
-    return label
+    """
+    Convierte 'R30205-V3_gapfill' en 'V3 ▹ Gapfill'
+    """
+    label = asset_id.split("/")[-1]
+    match = re.search(r"-V(\d+)_?(.*)", label)
+
+    if not match:
+        return f"📦 {label}"
+
+    version = match.group(1)
+    sufijo = match.group(2)
+
+    if sufijo:
+        # Usamos un marcador sutil (▹) para procesos derivados
+        nombre_proceso = sufijo.replace('_', ' ').title()
+        return f"V{version} ▹ {nombre_proceso}"
+
+    return f"V{version} (Base)"
+
 
 def categorizar_versiones(versiones_list):
-    """Agrupa assets por etapa técnica para los checkboxes del sidebar."""
-    categorias = {
-        "🚀 Clasificación & Joins": [],
-        "🛠️ Refinamiento (Gapfill/Temp)": [],
-        "🧪 Filtros & Ajustes": [],
-        "✅ Mapas Finales/Generales": []
+    """
+    Ordena cronológicamente y devuelve el grupo de procesamiento.
+    """
+    ordenadas = sorted(versiones_list, key=_extraer_clave_orden)
+
+    return {
+        "📋 Flujo de Trabajo": ordenadas
     }
-    for v in versiones_list:
-        v_l = v.lower()
-        if "mapageneral" in v_l: categorias["✅ Mapas Finales/Generales"].append(v)
-        elif "filtro" in v_l: categorias["🧪 Filtros & Ajustes"].append(v)
-        elif "gapfill" in v_l or "temporal" in v_l: categorias["🛠️ Refinamiento (Gapfill/Temp)"].append(v)
-        else: categorias["🚀 Clasificación & Joins"].append(v)
-    return categorias
+
 
 def organizar_reporte_novedades(nombres_string):
     """
-    Toma la cadena 'R30205-V1, R30424-V2...' y la organiza por Región.
+    Organiza la cadena de assets nuevos por Región con iconos de ubicación.
     """
-    if not nombres_string: return {}
-    
-    lista = [n.strip() for n in nombres_string.split(",")]
+    if not nombres_string:
+        return {}
+
+    lista = [n.strip() for n in nombres_string.split(",") if n.strip()]
     reporte = {}
-    
+
     for nombre in lista:
         match_reg = re.search(r"R(\d+)", nombre)
-        reg_id = match_reg.group(1) if match_reg else "Otras"
-        
-        if reg_id not in reporte:
-            reporte[reg_id] = []
-        
-        reporte[reg_id].append(formatear_nombre_humano(nombre))
-        
+        reg_id = match_reg.group(1) if match_reg else "General"
+
+        # Agregamos el icono de pin para las regiones en el reporte
+        reporte.setdefault(reg_id, []).append(
+            formatear_nombre_humano(nombre)
+        )
+
     return reporte

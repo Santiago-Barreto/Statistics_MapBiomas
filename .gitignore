@@ -20,7 +20,7 @@ env/
 # --- OS / IDE ---
 .vscode/
 .idea/
-.DS_Store
+.DS_Storegit add .gitignore
 Thumbs.db
 
 # Datos/Caché
