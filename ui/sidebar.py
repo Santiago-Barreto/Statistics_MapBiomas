@@ -38,7 +38,8 @@ def render_sidebar():
         
         ts, total, nombres_raw = obtener_resumen_sincro()
         if ts:
-            fecha_dt = datetime.datetime.fromtimestamp(ts).strftime('%H:%M:%S')
+            hora_local = datetime.datetime.fromtimestamp(ts) - datetime.timedelta(hours=5)
+            fecha_dt = hora_local.strftime('%H:%M:%S')
             st.caption(f"🔄 Sincronización: {fecha_dt}")
             
             if total > 0:
