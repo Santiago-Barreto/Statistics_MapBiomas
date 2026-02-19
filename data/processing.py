@@ -18,7 +18,12 @@ def cargar_datos_totales(asset_ids):
     
     conn = get_conn()
     placeholders = ','.join(['?'] * len(asset_ids))
-    query = f"SELECT asset_id, year, class_id, area_ha FROM stats WHERE asset_id IN ({placeholders})"
+    query = f"""
+        SELECT asset_id, year, class_id, area_ha 
+        FROM stats 
+        WHERE asset_id IN ({placeholders})
+        ORDER BY asset_id, year
+    """
     
     df_raw = pd.read_sql(query, conn, params=asset_ids)
     conn.close()
@@ -27,16 +32,21 @@ def cargar_datos_totales(asset_ids):
         return {}
 
     data_dict = {}
-    for a_id in asset_ids:
+
+    for a_id, df_v in df_raw.groupby("asset_id"):
         label = extraer_label_version(a_id)
-        df_v = df_raw[df_raw['asset_id'] == a_id].copy()
-        
-        if not df_v.empty:
-            df_pivot = df_v.pivot(index='year', columns='class_id', values='area_ha').reset_index()
-            df_pivot['version'] = label
-            data_dict[label] = df_pivot
+
+        df_pivot = (
+            df_v
+            .pivot(index='year', columns='class_id', values='area_ha')
+            .reset_index()
+        )
+
+        df_pivot["version"] = label
+        data_dict[label] = df_pivot
 
     return data_dict
+
 
 def construir_dataframe(raw_data, version):
     """
@@ -48,19 +58,23 @@ def construir_dataframe(raw_data, version):
         return None
         
     df = pd.DataFrame(raw_data)
+
     cols_drop = {'system:index', 'geo'}
     df = df.drop(columns=[c for c in cols_drop if c in df.columns])
-    
-    nuevas_columnas = {}
-    for col in df.columns:
-        if col not in ['year', 'version']:
-            nuevas_columnas[col] = col.split('_')[0]
-            
+
+    nuevas_columnas = {
+        col: col.split('_', 1)[0]
+        for col in df.columns
+        if col not in ['year', 'version']
+    }
+
     df = df.rename(columns=nuevas_columnas)
-    df['year'] = df['year'].astype(int)
+
+    df['year'] = df['year'].astype('int16')
     df['version'] = version
-    
+
     return df
+
 
 def fusionar_versiones(dfs):
     """
@@ -69,9 +83,39 @@ def fusionar_versiones(dfs):
     """
     return pd.concat(dfs, ignore_index=True, sort=False) if dfs else None
 
+
 def extraer_label_version(path):
     """
     Extrae y normaliza la etiqueta final del asset a partir de su ruta 
     completa en Google Earth Engine.
     """
-    return path.split('/')[-1]
+    return path.rsplit('/', 1)[-1]
+
+def cargar_datos_agricultura(asset_ids):
+    """
+    Carga datos agrícolas unificados directamente desde SQL.
+    Retorna un único DataFrame con una columna 'version' normalizada.
+    """
+    if not asset_ids:
+        return None
+
+    conn = get_conn()
+    placeholders = ','.join(['?'] * len(asset_ids))
+    query = f"""
+        SELECT asset_id, year, metric, value
+        FROM stats_agricultura
+        WHERE asset_id IN ({placeholders})
+          AND metric NOT IN ('regionId', 'clase_transversal')
+        ORDER BY year ASC
+    """
+    df = pd.read_sql(query, conn, params=asset_ids)
+    conn.close()
+
+    if df.empty:
+        return None
+
+    df['version'] = df['asset_id'].str.rsplit('/', n=1).str[-1]
+    
+    df = df.drop(columns=['asset_id'])
+
+    return df

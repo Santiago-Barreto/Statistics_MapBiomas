@@ -6,6 +6,7 @@ el registro de auditoría de sincronización automática.
 
 import sqlite3
 import os
+import ee
 
 DB_PATH = "data/mapbiomas.db"
 
@@ -53,6 +54,27 @@ def inicializar_db():
         nombres_nuevos TEXT
     )
     """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS stats_agricultura (
+        asset_id TEXT NOT NULL,
+        year INTEGER NOT NULL,
+        metric TEXT NOT NULL,
+        value REAL NOT NULL,
+        PRIMARY KEY (asset_id, year, metric),
+        FOREIGN KEY (asset_id) REFERENCES assets (asset_id) ON DELETE CASCADE
+    )
+    """)
+
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_agri_asset 
+    ON stats_agricultura(asset_id)
+    """)
+
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_agri_year 
+    ON stats_agricultura(year)
+    """)
+
     
     conn.commit()
     conn.close()

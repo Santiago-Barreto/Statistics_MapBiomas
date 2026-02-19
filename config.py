@@ -6,6 +6,8 @@ visuales estándar para la clasificación LULC.
 
 ASSET_PARENT = "projects/mapbiomas-colombia/assets/LULC/COLECCION4/ESTADISTICAS/"
 ASSET_REGIONES = "projects/mapbiomas-colombia/assets/DATOS_AUXILIARES/VECTORES/col-clasificacion-regiones-c3"
+ASSET_PARENT_AGRICULTURA = "projects/mapbiomas-colombia/assets/LULC/COLECCION4/TRANSVERSALES/ESTADISTICAS/"
+
 
 BASE_PATH_V1 = "projects/mapbiomas-colombia/assets/LULC/COLECCION4/clasificacion"
 BASE_PATH_VX = "projects/mapbiomas-colombia/assets/LULC/COLECCION4/clasificacion-ft"
@@ -48,3 +50,8 @@ MAPBIOMAS_PALETTE = ["#FFFFFF"] * 100
 for id_clase, info in LEYENDA_MAPBIOMAS.items():
     if id_clase < 100:
         MAPBIOMAS_PALETTE[id_clase] = info["color"]
+
+MODOS_APP = {
+    "🎯 Coberturas": "coberturas",
+    "🚜 Agricultura": "agricultura",
+}
