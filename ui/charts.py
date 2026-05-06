@@ -1,6 +1,8 @@
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from data.processing import fusionar_versiones
+from data.biome_analysis import construir_heatmap_cambios, construir_tabla_linea_temporal
 from config import LEYENDA_MAPBIOMAS
 
 def obtener_configuracion_visual(columnas):
@@ -119,3 +121,87 @@ def render_biome_view(data_dict, biome):
             st.markdown(f"#### 📈 Versión {v}")
             plot_temporal_series(df, biome)
             st.divider()
+
+
+def _label_clase(class_id):
+    """Convierte IDs técnicos (ID03) en etiquetas legibles de cobertura."""
+    try:
+        class_num = int(str(class_id).replace("ID", ""))
+    except ValueError:
+        return str(class_id)
+    return LEYENDA_MAPBIOMAS.get(class_num, {}).get("label", str(class_id))
+
+
+def render_regional_contributions_biome(df_regional, biome):
+    """
+    Muestra análisis por región para una cobertura del bioma:
+    - heatmap anotado de ganancias/pérdidas interanuales
+    - tabla de línea temporal con cambios anuales
+    """
+    if df_regional is None or df_regional.empty:
+        return
+
+    st.markdown(f"### 🧭 Aportes regionales · Bioma {biome}")
+    st.caption(
+        "Identifica qué regiones explican el total del bioma y cuáles impulsan las ganancias o pérdidas por cobertura."
+    )
+
+    clases = sorted(df_regional["class_id"].dropna().unique().tolist())
+    anios = sorted(df_regional["year"].dropna().unique().tolist())
+    if not clases or not anios:
+        return
+
+    c1, c2, c3 = st.columns([1.2, 1, 1])
+    with c1:
+        clase_sel = st.selectbox(
+            "Cobertura",
+            options=clases,
+            format_func=_label_clase,
+            key=f"bioma_aporte_clase_{biome}",
+        )
+    with c2:
+        st.metric("Años analizados", f"{anios[0]} - {anios[-1]}")
+    with c3:
+        st.metric("Cobertura", _label_clase(clase_sel))
+
+    df_cov = df_regional[df_regional["class_id"] == clase_sel].copy()
+    if df_cov.empty:
+        st.info("No hay datos para la cobertura seleccionada.")
+        return
+
+    df_heat = construir_heatmap_cambios(df_cov)
+    if df_heat.empty or df_heat.shape[1] == 0:
+        st.info("Se requieren al menos dos años para calcular ganancias y pérdidas.")
+        return
+
+    st.markdown("#### Heatmap de ganancias y pérdidas por región")
+    zmax = float(df_heat.abs().to_numpy().max()) if not df_heat.empty else 0.0
+    if zmax == 0:
+        zmax = 1.0
+
+    fig_heat = go.Figure(
+        data=go.Heatmap(
+            z=df_heat.values,
+            x=df_heat.columns.tolist(),
+            y=df_heat.index.tolist(),
+            colorscale="RdYlGn",
+            zmid=0,
+            zmin=-zmax,
+            zmax=zmax,
+            colorbar={"title": "Δ ha"},
+            text=[[f"{v:,.0f}" for v in row] for row in df_heat.values],
+            texttemplate="%{text}",
+            textfont={"size": 11},
+        )
+    )
+    fig_heat.update_layout(
+        template="plotly_white",
+        xaxis_title="Periodo",
+        yaxis_title="Región",
+        margin={"l": 20, "r": 20, "t": 10, "b": 10},
+    )
+    st.plotly_chart(fig_heat, width="stretch")
+
+    st.markdown("#### Línea temporal completa (ha, ganancia/pérdida anual)")
+    tabla_tiempo = construir_tabla_linea_temporal(df_cov)
+    st.dataframe(tabla_tiempo, width="stretch")

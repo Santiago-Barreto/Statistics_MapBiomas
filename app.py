@@ -10,7 +10,7 @@ from config import MODOS_APP
 from data.db import inicializar_db
 from gee.init import inicializar_gee
 from sync.manager import chequeo_automatico_sincro
-from data.processing import cargar_datos_totales, cargar_datos_bioma
+from data.processing import cargar_datos_totales, cargar_datos_bioma, cargar_aportes_regionales_bioma
 from ui.sidebar import render_sidebar
 from ui.map import render_visual_inspector
 from ui.status import render_status_popover 
@@ -19,6 +19,7 @@ from ui.charts import (
     render_dashboard_view,
     render_graphs_only_view,
     render_combined_view,
+    render_regional_contributions_biome,
 )
 
 def configurar_app():
@@ -166,8 +167,10 @@ def main():
         with st.spinner("Cargando datos..."):
             if scope == "bioma":
                 data_dict = cargar_datos_bioma(version_sel, bioma_sel)
+                aportes_regionales_df = cargar_aportes_regionales_bioma(version_sel)
             else:
                 data_dict = cargar_datos_totales(version_sel)
+                aportes_regionales_df = None
 
         if not data_dict:
             st.error("No se encontraron datos para la selección realizada.")
@@ -186,6 +189,10 @@ def main():
         if modo_vista in vistas:
             chart_scope = bioma_sel if scope == "bioma" else region_id
             vistas[modo_vista](data_dict, chart_scope)
+
+        if scope == "bioma":
+            st.divider()
+            render_regional_contributions_biome(aportes_regionales_df, bioma_sel)
 
 if __name__ == "__main__":
     main()

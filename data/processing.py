@@ -5,6 +5,7 @@ en estructuras de Pandas DataFrame optimizadas para análisis y visualización.
 """
 
 import pandas as pd
+import re
 from data.db import get_conn
 from data.year_norm import normalize_year
 
@@ -81,6 +82,8 @@ def cargar_datos_bioma(asset_ids, biome_name):
 
     df_raw["year"] = df_raw["year"].apply(_to_int_year)
     df_raw = df_raw.dropna(subset=["year"])
+    # Regla de negocio: en análisis agregado por bioma se excluye 2026.
+    df_raw = df_raw[df_raw["year"] != 2026]
     if df_raw.empty:
         return {}
 
@@ -95,6 +98,47 @@ def cargar_datos_bioma(asset_ids, biome_name):
     df_pivot["version"] = f"BIOMA_{biome_name}".upper().replace(" ", "_")
 
     return {f"Bioma {biome_name}": df_pivot}
+
+
+def _extraer_region_asset(asset_id):
+    """Extrae el identificador de región desde el nombre del asset."""
+    label = extraer_label_version(asset_id).replace("-", "_")
+    match = re.search(r"(R\d+)", label, flags=re.IGNORECASE)
+    return match.group(1).upper() if match else label
+
+
+def cargar_aportes_regionales_bioma(asset_ids):
+    """
+    Retorna el detalle por región para análisis de aportes en modo bioma.
+    """
+    if not asset_ids:
+        return pd.DataFrame()
+
+    conn = get_conn()
+    placeholders = ",".join(["?"] * len(asset_ids))
+    query = f"""
+        SELECT asset_id, year, class_id, area_ha
+        FROM stats
+        WHERE asset_id IN ({placeholders})
+        ORDER BY asset_id, year
+    """
+    df_raw = pd.read_sql(query, conn, params=asset_ids)
+    conn.close()
+
+    if df_raw.empty:
+        return pd.DataFrame()
+
+    df_raw["year"] = df_raw["year"].apply(_to_int_year)
+    df_raw = df_raw.dropna(subset=["year"])
+    # Regla de negocio: en análisis agregado por bioma se excluye 2026.
+    df_raw = df_raw[df_raw["year"] != 2026]
+    if df_raw.empty:
+        return pd.DataFrame()
+
+    df_raw["year"] = df_raw["year"].astype("int32")
+    df_raw["region"] = df_raw["asset_id"].apply(_extraer_region_asset)
+
+    return df_raw[["region", "year", "class_id", "area_ha"]]
 
 
 def construir_dataframe(raw_data, version):

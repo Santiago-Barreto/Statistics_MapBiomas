@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from data.processing import _to_int_year, cargar_datos_bioma, cargar_datos_totales
+from data.processing import (
+    _to_int_year,
+    _extraer_region_asset,
+    cargar_aportes_regionales_bioma,
+    cargar_datos_bioma,
+    cargar_datos_totales,
+)
 from tests.conftest import _bootstrap_schema, insert_stats_rows
 
 
@@ -86,7 +92,7 @@ def test_cargar_datos_bioma_suma_areas_por_year_class(temp_db):
     row_2025 = df[df["year"] == 2025].iloc[0]
     assert row_2025["ID03"] == 150
     assert row_2025["ID49"] == 7
-    assert df[df["year"] == 2026]["ID03"].iloc[0] == 10
+    assert 2026 not in df["year"].tolist()
 
 
 def test_cargar_datos_totales_coercion_year_desde_texto_decimal(temp_db):
@@ -105,3 +111,38 @@ def test_cargar_datos_totales_coercion_year_desde_texto_decimal(temp_db):
 def test_cargar_vacio(temp_db):
     assert cargar_datos_totales([]) == {}
     assert cargar_datos_bioma([], "X") == {}
+
+
+@pytest.mark.parametrize(
+    "asset_id,expected",
+    [
+        ("projects/x/R001_V3", "R001"),
+        ("projects/x/r45-v2", "R45"),
+        ("projects/x/SIN_REGION", "SIN_REGION"),
+    ],
+)
+def test_extraer_region_asset(asset_id, expected):
+    assert _extraer_region_asset(asset_id) == expected
+
+
+def test_cargar_aportes_regionales_bioma_retorna_detalle_por_region(temp_db):
+    conn = sqlite3_connect(temp_db)
+    aid1 = "projects/x/R001_V3"
+    aid2 = "projects/y/R002_V3"
+    insert_stats_rows(
+        conn,
+        [
+            (aid1, 2025, "ID03", 100),
+            (aid2, 2025, "ID03", 50),
+            (aid1, 2026, "ID03", 80),
+            (aid2, "no-anio", "ID03", 999),  # se descarta
+        ],
+    )
+    conn.close()
+
+    out = cargar_aportes_regionales_bioma([aid1, aid2]).sort_values(["region", "year"]).reset_index(drop=True)
+
+    assert out["region"].tolist() == ["R001", "R002"]
+    assert out["year"].tolist() == [2025, 2025]
+    assert out["class_id"].tolist() == ["ID03", "ID03"]
+    assert out["area_ha"].tolist() == [100, 50]
