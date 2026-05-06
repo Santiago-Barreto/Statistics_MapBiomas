@@ -45,6 +45,16 @@ def inicializar_db():
         FOREIGN KEY (asset_id) REFERENCES assets (asset_id) ON DELETE CASCADE
     )
     """)
+
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_stats_asset_year
+    ON stats(asset_id, year)
+    """)
+
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_assets_bioma_region
+    ON assets(bioma, region_id)
+    """)
     
     cur.execute("""
     CREATE TABLE IF NOT EXISTS control_sincro (

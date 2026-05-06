@@ -73,24 +73,7 @@ def render_visual_inspector(region_id, version_sel, data_dict):
     """
     st.subheader("🔍 Inspección Visual Histórica")
     
-    primer_df = next(iter(data_dict.values()))
-    min_y = int(primer_df['year'].min())
-    max_y = int(primer_df['year'].max())
-
-    default_year = st.session_state.get("selected_year", max_y)
-    
     c_year, c_ver, c_btn = st.columns([1, 1, 1])
-    
-    with c_year:
-        año_ver = st.number_input(
-            label="Año central:", 
-            min_value=min_y, 
-            max_value=max_y, 
-            value=default_year,
-            step=1,
-            format="%d"
-        )
-        st.session_state.selected_year = año_ver
 
     with c_ver:
         v_mapa = st.selectbox(
@@ -98,6 +81,35 @@ def render_visual_inspector(region_id, version_sel, data_dict):
                     version_sel,
                     format_func=extraer_label_version
                 )
+
+    selected_label = extraer_label_version(v_mapa)
+    selected_df = data_dict.get(selected_label)
+    if selected_df is None or selected_df.empty:
+        st.warning("No hay años disponibles para la versión seleccionada.")
+        return
+
+    available_years = sorted(selected_df["year"].dropna().astype(int).unique().tolist())
+    min_y = int(min(available_years))
+    max_y = int(max(available_years))
+    default_year = st.session_state.get("selected_year", max_y)
+    if default_year not in available_years:
+        default_year = max_y
+
+    with c_year:
+        año_ver = st.number_input(
+            label="Año central:",
+            min_value=min_y,
+            max_value=max_y,
+            value=int(default_year),
+            step=1,
+            format="%d"
+        )
+        if año_ver not in available_years:
+            # Ajusta al año válido más cercano para evitar errores en assets con series desfasadas.
+            año_ver = min(available_years, key=lambda y: abs(y - int(año_ver)))
+            st.info(f"Se ajustó al año disponible más cercano: {año_ver}")
+        st.session_state.selected_year = int(año_ver)
+
     with c_btn:
         st.write(" ") 
         if st.button("🔍 Comparar T-1 · T · T+1", use_container_width=True):
@@ -107,7 +119,7 @@ def render_visual_inspector(region_id, version_sel, data_dict):
                 anios = [año_ver - 1, año_ver, año_ver + 1]
                 st.session_state.thumbnails = {
                     "año": año_ver,
-                    "items": [(y, get_thumbnail_url(geom, y, v_mapa)) if min_y <= y <= max_y else (y, None) 
+                    "items": [(y, get_thumbnail_url(geom, y, v_mapa)) if y in available_years else (y, None)
                         for y in anios]
                 }
 

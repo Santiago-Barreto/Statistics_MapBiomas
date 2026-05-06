@@ -8,8 +8,10 @@ import time
 import ee
 import re
 from data.db import get_conn
+from data.year_norm import normalize_year
 from gee.assets import leer_stats_procesadas
 from config import ASSET_PARENT, ASSET_REGIONES, ASSET_PARENT_AGRICULTURA
+
 
 def obtener_resumen_sincro():
     """
@@ -32,7 +34,7 @@ def chequeo_automatico_sincro():
     ultima_fecha = res_sincro[0]
     ahora = int(time.time())
     
-    if not ultima_fecha or (ahora - ultima_fecha) > 600: 
+    if not ultima_fecha or (ahora - ultima_fecha) > 600:
         total, nombres = sincronizar_todo_interno()
         conn = get_conn()
         cur = conn.cursor()
@@ -51,8 +53,12 @@ def sincronizar_todo_interno():
     conn = get_conn()
     cur = conn.cursor()
 
-    remote_assets_cob = ee.data.listAssets({'parent': ASSET_PARENT}).get('assets', [])
-    remote_assets_agri = ee.data.listAssets({'parent': ASSET_PARENT_AGRICULTURA}).get('assets', [])
+    try:
+        remote_assets_cob = ee.data.listAssets({'parent': ASSET_PARENT}).get('assets', [])
+        remote_assets_agri = ee.data.listAssets({'parent': ASSET_PARENT_AGRICULTURA}).get('assets', [])
+    except Exception:
+        conn.close()
+        return 0, ""
 
     remote_ids_cob = {a['id'] for a in remote_assets_cob}
     remote_ids_agri = {a['id'] for a in remote_assets_agri}
@@ -104,7 +110,9 @@ def sincronizar_todo_interno():
                 rows_cob = []
 
                 for r in raw_data:
-                    year = int(r.get('year', 0))
+                    year = normalize_year(r.get('year'))
+                    if year is None:
+                        continue
 
                     for k, v in r.items():
                         k_norm = k.replace('-', '_')
@@ -129,7 +137,7 @@ def sincronizar_todo_interno():
         a_id = asset['id']
         label = a_id.split('/')[-1]
 
-        if not re.search(r'^STATS_TRANSVERSAL_', label):
+        if not re.search(r'^STATS_TRANSVERSAL_AGRICULTURA', label):
             continue
 
         match = re.search(r'_R(\d+)$', label)
@@ -142,7 +150,9 @@ def sincronizar_todo_interno():
                 rows_agri = []
 
                 for r in raw_data:
-                    year = int(r.get('year', 0))
+                    year = normalize_year(r.get('year'))
+                    if year is None:
+                        continue
 
                     for k, v in r.items():
                         if k in ['year', 'version', 'system:index']:

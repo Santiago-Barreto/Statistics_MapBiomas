@@ -6,6 +6,11 @@ en estructuras de Pandas DataFrame optimizadas para análisis y visualización.
 
 import pandas as pd
 from data.db import get_conn
+from data.year_norm import normalize_year
+
+
+def _to_int_year(value):
+    return normalize_year(value)
 
 def cargar_datos_totales(asset_ids):
     """
@@ -19,7 +24,7 @@ def cargar_datos_totales(asset_ids):
     conn = get_conn()
     placeholders = ','.join(['?'] * len(asset_ids))
     query = f"""
-        SELECT asset_id, year, class_id, area_ha 
+        SELECT asset_id, year, class_id, area_ha
         FROM stats 
         WHERE asset_id IN ({placeholders})
         ORDER BY asset_id, year
@@ -32,6 +37,10 @@ def cargar_datos_totales(asset_ids):
         return {}
 
     data_dict = {}
+
+    df_raw["year"] = df_raw["year"].apply(_to_int_year)
+    df_raw = df_raw.dropna(subset=["year"])
+    df_raw["year"] = df_raw["year"].astype("int32")
 
     for a_id, df_v in df_raw.groupby("asset_id"):
         label = extraer_label_version(a_id)
@@ -46,6 +55,46 @@ def cargar_datos_totales(asset_ids):
         data_dict[label] = df_pivot
 
     return data_dict
+
+
+def cargar_datos_bioma(asset_ids, biome_name):
+    """
+    Agrega estadísticas de múltiples assets (regiones) para un bioma completo.
+    """
+    if not asset_ids:
+        return {}
+
+    conn = get_conn()
+    placeholders = ",".join(["?"] * len(asset_ids))
+    query = f"""
+        SELECT year, class_id, SUM(area_ha) AS area_ha
+        FROM stats
+        WHERE asset_id IN ({placeholders})
+        GROUP BY year, class_id
+        ORDER BY year
+    """
+    df_raw = pd.read_sql(query, conn, params=asset_ids)
+    conn.close()
+
+    if df_raw.empty:
+        return {}
+
+    df_raw["year"] = df_raw["year"].apply(_to_int_year)
+    df_raw = df_raw.dropna(subset=["year"])
+    if df_raw.empty:
+        return {}
+
+    df_raw["year"] = df_raw["year"].astype("int32")
+
+    df_pivot = (
+        df_raw
+        .pivot(index="year", columns="class_id", values="area_ha")
+        .reset_index()
+        .sort_values("year")
+    )
+    df_pivot["version"] = f"BIOMA_{biome_name}".upper().replace(" ", "_")
+
+    return {f"Bioma {biome_name}": df_pivot}
 
 
 def construir_dataframe(raw_data, version):

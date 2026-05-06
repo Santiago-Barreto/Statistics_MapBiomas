@@ -6,6 +6,65 @@ un orden cronológico basado en versión y tipo de proceso.
 """
 
 import re
+from collections import defaultdict
+
+
+def es_asset_base_sin_proceso(asset_id):
+    """
+    True si la etiqueta del asset es sólo ``R{id}_V{versión}``
+    (mapa base de estadísticas, sin sufijos de proceso).
+    """
+    label = asset_id.split("/")[-1].replace("-", "_")
+    m = re.match(r"^R(\d+)_V(\d+)_?(.*)$", label)
+    return bool(m) and (m.group(3) == "")
+
+
+def efectiva_ultima_version_base(versions):
+    """
+    Máximo numérico de versión útil entre mapas base.
+
+    En la nomenclatura de assets, ``V11`` no representa la versión revisada más
+    reciente cuando conviven varias etiquetas numéricas: si hay otras versiones además del 11,
+    se usa el máximo ignorando únicamente a **11** como candidato dominante.
+
+    Cuando sólo existe el 11 para esa región, se conserva igualmente.
+    """
+    if not versions:
+        raise ValueError("lista de versiones vacía")
+
+    uniq = sorted(set(v for v in versions if isinstance(v, int)))
+
+    cand = [v for v in uniq if v != 11]
+    return max(cand) if cand else max(uniq)
+
+
+def seleccionar_assets_base_ultima_version_efectiva(lista_assets):
+    """
+    Selecciona el asset con la versión más alta para cada región,
+    ignorando las versiones V11 y manejando sufijos.
+    """
+    regiones_dict = {}
+
+    for path in lista_assets:
+        nombre = path.split("/")[-1]
+        
+        match = re.search(r'(R\d+)[_-]V(\d+)', nombre)
+        
+        if match:
+            id_region = match.group(1)
+            num_version = int(match.group(2))
+            
+            if num_version == 11:
+                continue
+                
+            if id_region not in regiones_dict or num_version > regiones_dict[id_region]['version']:
+                regiones_dict[id_region] = {
+                    'version': num_version,
+                    'path': path
+                }
+    
+    return [info['path'] for info in regiones_dict.values()]
+
 
 def _extraer_clave_orden(asset_id):
     """

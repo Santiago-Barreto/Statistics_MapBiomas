@@ -8,7 +8,7 @@ import ee
 import time
 from data.db import get_conn
 from config import ASSET_PARENT, ASSET_PARENT_AGRICULTURA
-from gee.assets import listar_versiones_disponibles
+from gee.assets import listar_versiones_disponibles, listar_assets_por_bioma
 
 def obtener_assets_totales(es_agricultura=False):
     """
@@ -46,7 +46,7 @@ def eliminar_assets_seleccionados(lista_ids, es_agricultura=False):
     conn.close()
     return resultados
 
-def render_admin_zone(modo, region_id=None):
+def render_admin_zone(modo, region_id=None, bioma_sel=None):
     """
     Interfaz administrativa para eliminación de assets según la región activa.
     """
@@ -58,10 +58,16 @@ def render_admin_zone(modo, region_id=None):
         if es_agricultura:
             version_pool = obtener_assets_totales(es_agricultura=True)
         else:
-            if not region_id:
+            if str(region_id) == "BIOMA" and bioma_sel:
+                version_pool = listar_assets_por_bioma(bioma_sel)
+            elif not region_id:
                 st.info("💡 Selecciona una región en el panel lateral.")
                 return
-            version_pool = listar_versiones_disponibles(region_id)
+            elif str(region_id) == "BIOMA":
+                st.info("💡 Vista bioma: elige un bioma en el panel lateral y vuelve a abrir este diálogo.")
+                return
+            else:
+                version_pool = listar_versiones_disponibles(region_id)
         
         if not version_pool:
             st.info("💡 No se encontraron assets físicos en GEE para esta configuración.")

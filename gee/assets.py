@@ -41,6 +41,21 @@ def listar_versiones_disponibles(region_id):
     conn.close()
     return [r[0] for r in rows]
 
+
+def listar_assets_por_bioma(bioma_nombre):
+    """
+    Retorna todos los assets asociados al bioma seleccionado.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT asset_id FROM assets WHERE bioma = ? ORDER BY asset_id DESC",
+        (bioma_nombre,)
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
 def leer_stats_procesadas(asset_id):
     """
     Extrae datos crudos de GEE. Solo es llamada por el motor de sincronización.

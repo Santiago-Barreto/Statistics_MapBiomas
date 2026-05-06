@@ -53,5 +53,4 @@ for id_clase, info in LEYENDA_MAPBIOMAS.items():
 
 MODOS_APP = {
     "🎯 Coberturas": "coberturas",
-    "🚜 Agricultura": "agricultura",
 }
