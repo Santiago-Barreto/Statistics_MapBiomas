@@ -6,7 +6,6 @@ el registro de auditoría de sincronización automática.
 
 import sqlite3
 import os
-import ee
 
 DB_PATH = "data/mapbiomas.db"
 
@@ -15,7 +14,12 @@ def get_conn():
     Establece la conexión con la base de datos SQLite local.
     """
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=30000;")
+    conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    return conn
 
 def inicializar_db():
     """

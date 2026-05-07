@@ -7,6 +7,7 @@ descubrimientos de assets en la infraestructura de GEE.
 import time
 import ee
 import re
+import sqlite3
 from data.db import get_conn
 from data.year_norm import normalize_year
 from gee.assets import leer_stats_procesadas
@@ -36,36 +37,52 @@ def chequeo_automatico_sincro():
     
     if not ultima_fecha or (ahora - ultima_fecha) > 600:
         total, nombres = sincronizar_todo_interno()
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT OR REPLACE INTO control_sincro (id, ultima_fecha, total_nuevos, nombres_nuevos) 
-            VALUES (1, ?, ?, ?)
-        """, (ahora, total, nombres))
-        conn.commit()
-        conn.close()
+        for intento in range(3):
+            conn = None
+            try:
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT OR REPLACE INTO control_sincro (id, ultima_fecha, total_nuevos, nombres_nuevos) 
+                    VALUES (1, ?, ?, ?)
+                """, (ahora, total, nombres))
+                conn.commit()
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or intento == 2:
+                    break
+                time.sleep(0.5 * (intento + 1))
+            finally:
+                if conn is not None:
+                    conn.close()
+
 def sincronizar_todo_interno():
     """
     Compara el inventario local con Google Earth Engine para los módulos de 
     Coberturas y Agricultura, descarga estadísticas para nuevos assets y 
     retorna un resumen de los cambios realizados.
     """
-    conn = get_conn()
-    cur = conn.cursor()
+    conn = None
 
     try:
+        conn = get_conn()
+        cur = conn.cursor()
         remote_assets_cob = ee.data.listAssets({'parent': ASSET_PARENT}).get('assets', [])
         remote_assets_agri = ee.data.listAssets({'parent': ASSET_PARENT_AGRICULTURA}).get('assets', [])
     except Exception:
-        conn.close()
+        if conn is not None:
+            conn.close()
         return 0, ""
 
-    remote_ids_cob = {a['id'] for a in remote_assets_cob}
-    remote_ids_agri = {a['id'] for a in remote_assets_agri}
+    remote_ids_cob = {a.get('id') for a in remote_assets_cob if a.get('id')}
+    remote_ids_agri = {a.get('id') for a in remote_assets_agri if a.get('id')}
 
-    bioma_mapping_raw = ee.FeatureCollection(ASSET_REGIONES).reduceColumns(
-        ee.Reducer.toList().repeat(2), ['id_regionC', 'bioma']
-    ).getInfo()
+    try:
+        bioma_mapping_raw = ee.FeatureCollection(ASSET_REGIONES).reduceColumns(
+            ee.Reducer.toList().repeat(2), ['id_regionC', 'bioma']
+        ).getInfo()
+    except Exception:
+        bioma_mapping_raw = {'list': [[], []]}
 
     listas = bioma_mapping_raw.get('list', [[], []])
     bioma_dict = dict(zip([str(x) for x in listas[0]], listas[1]))
@@ -92,7 +109,9 @@ def sincronizar_todo_interno():
         cur.execute("DELETE FROM stats_agricultura WHERE asset_id = ?", (d_id,))
 
     for asset in remote_assets_cob:
-        a_id = asset['id']
+        a_id = asset.get('id')
+        if not a_id:
+            continue
         label = a_id.split('/')[-1]
         label_norm = label.replace('-', '_')
         region_id = label_norm.split('_V')[0].replace('R', '')
@@ -134,7 +153,9 @@ def sincronizar_todo_interno():
                     )
 
     for asset in remote_assets_agri:
-        a_id = asset['id']
+        a_id = asset.get('id')
+        if not a_id:
+            continue
         label = a_id.split('/')[-1]
 
         if not re.search(r'^STATS_TRANSVERSAL_AGRICULTURA', label):
@@ -171,7 +192,12 @@ def sincronizar_todo_interno():
                         rows_agri
                     )
 
-    conn.commit()
-    conn.close()
+    try:
+        conn.commit()
+    except sqlite3.OperationalError:
+        conn.rollback()
+        return 0, ""
+    finally:
+        conn.close()
 
     return len(nombres_nuevos), ", ".join(nombres_nuevos)
