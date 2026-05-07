@@ -6,7 +6,7 @@ en estructuras de Pandas DataFrame optimizadas para análisis y visualización.
 
 import pandas as pd
 import re
-from data.db import get_conn
+from data.db import leer_stats_agri_db, leer_stats_db
 from data.year_norm import normalize_year
 
 
@@ -21,18 +21,8 @@ def cargar_datos_totales(asset_ids):
     """
     if not asset_ids:
         return {}
-    
-    conn = get_conn()
-    placeholders = ','.join(['?'] * len(asset_ids))
-    query = f"""
-        SELECT asset_id, year, class_id, area_ha
-        FROM stats 
-        WHERE asset_id IN ({placeholders})
-        ORDER BY asset_id, year
-    """
-    
-    df_raw = pd.read_sql(query, conn, params=asset_ids)
-    conn.close()
+
+    df_raw = pd.DataFrame(leer_stats_db(asset_ids))
 
     if df_raw.empty:
         return {}
@@ -65,20 +55,16 @@ def cargar_datos_bioma(asset_ids, biome_name):
     if not asset_ids:
         return {}
 
-    conn = get_conn()
-    placeholders = ",".join(["?"] * len(asset_ids))
-    query = f"""
-        SELECT year, class_id, SUM(area_ha) AS area_ha
-        FROM stats
-        WHERE asset_id IN ({placeholders})
-        GROUP BY year, class_id
-        ORDER BY year
-    """
-    df_raw = pd.read_sql(query, conn, params=asset_ids)
-    conn.close()
+    df_raw = pd.DataFrame(leer_stats_db(asset_ids))
 
     if df_raw.empty:
         return {}
+
+    df_raw = (
+        df_raw.groupby(["year", "class_id"], as_index=False)["area_ha"]
+        .sum()
+        .sort_values("year")
+    )
 
     df_raw["year"] = df_raw["year"].apply(_to_int_year)
     df_raw = df_raw.dropna(subset=["year"])
@@ -114,16 +100,7 @@ def cargar_aportes_regionales_bioma(asset_ids):
     if not asset_ids:
         return pd.DataFrame()
 
-    conn = get_conn()
-    placeholders = ",".join(["?"] * len(asset_ids))
-    query = f"""
-        SELECT asset_id, year, class_id, area_ha
-        FROM stats
-        WHERE asset_id IN ({placeholders})
-        ORDER BY asset_id, year
-    """
-    df_raw = pd.read_sql(query, conn, params=asset_ids)
-    conn.close()
+    df_raw = pd.DataFrame(leer_stats_db(asset_ids))
 
     if df_raw.empty:
         return pd.DataFrame()
@@ -192,21 +169,16 @@ def cargar_datos_agricultura(asset_ids):
     if not asset_ids:
         return None
 
-    conn = get_conn()
-    placeholders = ','.join(['?'] * len(asset_ids))
-    query = f"""
-        SELECT asset_id, year, metric, value
-        FROM stats_agricultura
-        WHERE asset_id IN ({placeholders})
-          AND metric NOT IN ('regionId', 'clase_transversal')
-        ORDER BY year ASC
-    """
-    df = pd.read_sql(query, conn, params=asset_ids)
-    conn.close()
+    df = pd.DataFrame(leer_stats_agri_db(asset_ids))
 
     if df.empty:
         return None
 
+    df = df[~df["metric"].isin(["regionId", "clase_transversal"])].copy()
+    if df.empty:
+        return None
+
+    df = df.sort_values("year")
     df['version'] = df['asset_id'].str.rsplit('/', n=1).str[-1]
     
     df = df.drop(columns=['asset_id'])

@@ -1,7 +1,5 @@
 """Pruebas de carga y agregación de estadísticas locales."""
 
-from pathlib import Path
-
 import pytest
 
 from data.processing import (
@@ -9,9 +7,9 @@ from data.processing import (
     _extraer_region_asset,
     cargar_aportes_regionales_bioma,
     cargar_datos_bioma,
+    cargar_datos_agricultura,
     cargar_datos_totales,
 )
-from tests.conftest import _bootstrap_schema, insert_stats_rows
 
 
 @pytest.mark.parametrize(
@@ -31,36 +29,17 @@ def test_to_int_year(raw, expected):
 
 
 @pytest.fixture
-def temp_db(monkeypatch, tmp_path: Path):
-    db_path = str(tmp_path / "test_stats.db")
-    monkeypatch.setattr("data.db.DB_PATH", db_path)
-
-    conn = sqlite3_connect(db_path)
-    _bootstrap_schema(conn)
-    conn.close()
-    yield db_path
-
-
-def sqlite3_connect(path: str):
-    import sqlite3
-
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    return sqlite3.connect(path)
+def fake_rows():
+    return [
+        {"asset_id": "projects/x/R1_V1", "year": 2025, "class_id": "ID03", "area_ha": 10.5},
+        {"asset_id": "projects/x/R1_V1", "year": 2026, "class_id": "ID03", "area_ha": 12.0},
+        {"asset_id": "projects/x/R1_V1", "year": "no-año", "class_id": "ID03", "area_ha": 1.0},
+        {"asset_id": "projects/y/R2_V2", "year": 2026, "class_id": "ID03", "area_ha": 4.0},
+    ]
 
 
-def test_cargar_datos_totales_pivota_y_filtra_anios_invalidos(temp_db):
-    conn = sqlite3_connect(temp_db)
-    insert_stats_rows(
-        conn,
-        [
-            ("projects/x/R1_V1", 2025, "ID03", 10.5),
-            ("projects/x/R1_V1", 2026, "ID03", 12.0),
-            ("projects/x/R1_V1", "no-año", "ID03", 1.0),  # se descarta
-            ("projects/y/R2_V2", 2026, "ID03", 4.0),
-        ],
-    )
-    conn.close()
-
+def test_cargar_datos_totales_pivota_y_filtra_anios_invalidos(monkeypatch, fake_rows):
+    monkeypatch.setattr("data.processing.leer_stats_db", lambda _asset_ids: fake_rows)
     out = cargar_datos_totales(["projects/x/R1_V1"])
 
     assert "R1_V1" in out
@@ -70,20 +49,18 @@ def test_cargar_datos_totales_pivota_y_filtra_anios_invalidos(temp_db):
     assert pytest.approx(df.loc[df["year"] == 2026, "ID03"].iloc[0]) == 12.0
 
 
-def test_cargar_datos_bioma_suma_areas_por_year_class(temp_db):
-    conn = sqlite3_connect(temp_db)
+def test_cargar_datos_bioma_suma_areas_por_year_class(monkeypatch):
     aid1 = "projects/x/R001_V3"
     aid2 = "projects/y/R002_V3"
-    insert_stats_rows(
-        conn,
-        [
-            (aid1, 2025, "ID03", 100),
-            (aid2, 2025, "ID03", 50),
-            (aid1, 2025, "ID49", 7),
-            (aid1, 2026, "ID03", 10),
+    monkeypatch.setattr(
+        "data.processing.leer_stats_db",
+        lambda _asset_ids: [
+            {"asset_id": aid1, "year": 2025, "class_id": "ID03", "area_ha": 100},
+            {"asset_id": aid2, "year": 2025, "class_id": "ID03", "area_ha": 50},
+            {"asset_id": aid1, "year": 2025, "class_id": "ID49", "area_ha": 7},
+            {"asset_id": aid1, "year": 2026, "class_id": "ID03", "area_ha": 10},
         ],
     )
-    conn.close()
 
     out = cargar_datos_bioma([aid1, aid2], "Amazónico")
 
@@ -95,20 +72,18 @@ def test_cargar_datos_bioma_suma_areas_por_year_class(temp_db):
     assert 2026 not in df["year"].tolist()
 
 
-def test_cargar_datos_totales_coercion_year_desde_texto_decimal(temp_db):
-    conn = sqlite3_connect(temp_db)
-    conn.execute(
-        "INSERT OR REPLACE INTO stats VALUES (?,?,?,?)",
-        ("projects/x/Z", "2025.0", "ID03", 1.0),
+def test_cargar_datos_totales_coercion_year_desde_texto_decimal(monkeypatch):
+    monkeypatch.setattr(
+        "data.processing.leer_stats_db",
+        lambda _asset_ids: [
+            {"asset_id": "projects/x/Z", "year": "2025.0", "class_id": "ID03", "area_ha": 1.0}
+        ],
     )
-    conn.commit()
-    conn.close()
-
     out = cargar_datos_totales(["projects/x/Z"])
     assert out["Z"]["year"].tolist() == [2025]
 
 
-def test_cargar_vacio(temp_db):
+def test_cargar_vacio():
     assert cargar_datos_totales([]) == {}
     assert cargar_datos_bioma([], "X") == {}
 
@@ -125,20 +100,18 @@ def test_extraer_region_asset(asset_id, expected):
     assert _extraer_region_asset(asset_id) == expected
 
 
-def test_cargar_aportes_regionales_bioma_retorna_detalle_por_region(temp_db):
-    conn = sqlite3_connect(temp_db)
+def test_cargar_aportes_regionales_bioma_retorna_detalle_por_region(monkeypatch):
     aid1 = "projects/x/R001_V3"
     aid2 = "projects/y/R002_V3"
-    insert_stats_rows(
-        conn,
-        [
-            (aid1, 2025, "ID03", 100),
-            (aid2, 2025, "ID03", 50),
-            (aid1, 2026, "ID03", 80),
-            (aid2, "no-anio", "ID03", 999),  # se descarta
+    monkeypatch.setattr(
+        "data.processing.leer_stats_db",
+        lambda _asset_ids: [
+            {"asset_id": aid1, "year": 2025, "class_id": "ID03", "area_ha": 100},
+            {"asset_id": aid2, "year": 2025, "class_id": "ID03", "area_ha": 50},
+            {"asset_id": aid1, "year": 2026, "class_id": "ID03", "area_ha": 80},
+            {"asset_id": aid2, "year": "no-anio", "class_id": "ID03", "area_ha": 999},
         ],
     )
-    conn.close()
 
     out = cargar_aportes_regionales_bioma([aid1, aid2]).sort_values(["region", "year"]).reset_index(drop=True)
 
@@ -146,3 +119,17 @@ def test_cargar_aportes_regionales_bioma_retorna_detalle_por_region(temp_db):
     assert out["year"].tolist() == [2025, 2025]
     assert out["class_id"].tolist() == ["ID03", "ID03"]
     assert out["area_ha"].tolist() == [100, 50]
+
+
+def test_cargar_datos_agricultura_filtra_metricas(monkeypatch):
+    monkeypatch.setattr(
+        "data.processing.leer_stats_agri_db",
+        lambda _asset_ids: [
+            {"asset_id": "projects/x/A", "year": 2024, "metric": "regionId", "value": 1},
+            {"asset_id": "projects/x/A", "year": 2024, "metric": "yield", "value": 2.5},
+        ],
+    )
+
+    out = cargar_datos_agricultura(["projects/x/A"])
+    assert out is not None
+    assert out["metric"].tolist() == ["yield"]

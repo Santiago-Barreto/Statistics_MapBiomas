@@ -6,7 +6,7 @@ Gestión de borrado físico en GEE y lógico en SQLite.
 import streamlit as st
 import ee
 import time
-from data.db import get_conn
+from data.db import borrar_assets_db, borrar_stats_agri_db, borrar_stats_db
 from config import ASSET_PARENT, ASSET_PARENT_AGRICULTURA
 from gee.assets import listar_versiones_disponibles, listar_assets_por_bioma
 
@@ -26,24 +26,20 @@ def eliminar_assets_seleccionados(lista_ids, es_agricultura=False):
     """
     Elimina assets de Google Earth Engine y sus registros en la base de datos local.
     """
-    conn = get_conn()
-    cur = conn.cursor()
     resultados = {"exitos": [], "errores": []}
 
     for a_id in lista_ids:
         try:
             ee.data.deleteAsset(a_id)
             if es_agricultura:
-                cur.execute("DELETE FROM stats_agricultura WHERE asset_id = ?", (a_id,))
+                borrar_stats_agri_db([a_id])
             else:
-                cur.execute("DELETE FROM assets WHERE asset_id = ?", (a_id,))
-                cur.execute("DELETE FROM stats WHERE asset_id = ?", (a_id,))
+                borrar_stats_db([a_id])
+                borrar_assets_db([a_id])
             resultados["exitos"].append(a_id)
         except Exception as e:
             resultados["errores"].append(f"Error en {a_id.split('/')[-1]}: {str(e)}")
-    
-    conn.commit()
-    conn.close()
+
     return resultados
 
 def render_admin_zone(modo, region_id=None, bioma_sel=None):
