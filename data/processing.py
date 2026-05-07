@@ -183,32 +183,3 @@ def extraer_label_version(path):
     completa en Google Earth Engine.
     """
     return path.rsplit('/', 1)[-1]
-
-def cargar_datos_agricultura(asset_ids):
-    """
-    Carga datos agrícolas unificados directamente desde SQL.
-    Retorna un único DataFrame con una columna 'version' normalizada.
-    """
-    if not asset_ids:
-        return None
-
-    conn = get_conn()
-    placeholders = ','.join(['?'] * len(asset_ids))
-    query = f"""
-        SELECT asset_id, year, metric, value
-        FROM stats_agricultura
-        WHERE asset_id IN ({placeholders})
-          AND metric NOT IN ('regionId', 'clase_transversal')
-        ORDER BY year ASC
-    """
-    df = pd.read_sql(query, conn, params=asset_ids)
-    conn.close()
-
-    if df.empty:
-        return None
-
-    df['version'] = df['asset_id'].str.rsplit('/', n=1).str[-1]
-    
-    df = df.drop(columns=['asset_id'])
-
-    return df

@@ -38,17 +38,6 @@ def _crear_schema_basico(path_db: str) -> None:
     )
     cur.execute(
         """
-        CREATE TABLE IF NOT EXISTS stats_agricultura (
-            asset_id TEXT,
-            year INTEGER,
-            metric TEXT,
-            value REAL,
-            PRIMARY KEY (asset_id, year, metric)
-        )
-        """
-    )
-    cur.execute(
-        """
         CREATE TABLE IF NOT EXISTS control_sincro (
             id INTEGER PRIMARY KEY,
             ultima_fecha INTEGER,
@@ -71,7 +60,7 @@ def test_sincronizar_todo_interno_omite_assets_invalidos(monkeypatch, tmp_path: 
         def listAssets(payload):
             if payload["parent"] == manager.ASSET_PARENT:
                 return {"assets": [{"id": "projects/x/R1_V1"}, {"name": "sin_id"}]}
-            return {"assets": [{"name": "sin_id_agri"}]}
+            return {"assets": []}
 
     class _FakeReducer:
         @staticmethod

@@ -6,7 +6,6 @@ visuales estándar para la clasificación LULC.
 
 ASSET_PARENT = "projects/mapbiomas-colombia/assets/LULC/COLECCION4/ESTADISTICAS/"
 ASSET_REGIONES = "projects/mapbiomas-colombia/assets/DATOS_AUXILIARES/VECTORES/col-clasificacion-regiones-c3"
-ASSET_PARENT_AGRICULTURA = "projects/mapbiomas-colombia/assets/LULC/COLECCION4/TRANSVERSALES/ESTADISTICAS/"
 
 
 BASE_PATH_V1 = "projects/mapbiomas-colombia/assets/LULC/COLECCION4/clasificacion"
@@ -31,7 +30,7 @@ LEYENDA_MAPBIOMAS = {
     9: {"label": "Silvicultura", "color": "#7A5900", "level": 2},
     35: {"label": "Palma aceitera", "color": "#9065D0", "level": 2},
     74: {"label": "Plátano y banano (beta)", "color": "#BE83F7", "level": 2},
-    21: {"label": "Mosaico de agricultura o pasto", "color": "#FFEFC3", "level": 2},
+    21: {"label": "Mosaico agropecuario", "color": "#FFEFC3", "level": 2},
     22: {"label": "Área sin vegetación", "color": "#D4271E", "level": 1},
     23: {"label": "Playas, dunas y bancos de arena", "color": "#FFA07A", "level": 2},
     24: {"label": "Infraestructura urbana", "color": "#D4271E", "level": 2},

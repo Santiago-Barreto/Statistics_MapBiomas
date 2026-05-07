@@ -6,12 +6,11 @@ descubrimientos de assets en la infraestructura de GEE.
 
 import time
 import ee
-import re
 import sqlite3
 from data.db import get_conn
 from data.year_norm import normalize_year
 from gee.assets import leer_stats_procesadas
-from config import ASSET_PARENT, ASSET_REGIONES, ASSET_PARENT_AGRICULTURA
+from config import ASSET_PARENT, ASSET_REGIONES
 
 
 def obtener_resumen_sincro():
@@ -58,8 +57,7 @@ def chequeo_automatico_sincro():
 
 def sincronizar_todo_interno():
     """
-    Compara el inventario local con Google Earth Engine para los módulos de 
-    Coberturas y Agricultura, descarga estadísticas para nuevos assets y 
+    Compara el inventario local con Google Earth Engine para coberturas, descarga estadísticas para nuevos assets y 
     retorna un resumen de los cambios realizados.
     """
     conn = None
@@ -68,14 +66,12 @@ def sincronizar_todo_interno():
         conn = get_conn()
         cur = conn.cursor()
         remote_assets_cob = ee.data.listAssets({'parent': ASSET_PARENT}).get('assets', [])
-        remote_assets_agri = ee.data.listAssets({'parent': ASSET_PARENT_AGRICULTURA}).get('assets', [])
     except Exception:
         if conn is not None:
             conn.close()
         return 0, ""
 
     remote_ids_cob = {a.get('id') for a in remote_assets_cob if a.get('id')}
-    remote_ids_agri = {a.get('id') for a in remote_assets_agri if a.get('id')}
 
     try:
         bioma_mapping_raw = ee.FeatureCollection(ASSET_REGIONES).reduceColumns(
@@ -90,23 +86,13 @@ def sincronizar_todo_interno():
     cur.execute("SELECT asset_id FROM assets")
     local_ids_cob = {r[0] for r in cur.fetchall()}
 
-    cur.execute("SELECT DISTINCT asset_id FROM stats_agricultura")
-    local_ids_agri = {r[0] for r in cur.fetchall()}
-
     new_assets_cob = remote_ids_cob - local_ids_cob
-    new_assets_agri = remote_ids_agri - local_ids_agri
 
-    nombres_nuevos = (
-        [nid.split('/')[-1] for nid in new_assets_cob] +
-        [nid.split('/')[-1] for nid in new_assets_agri]
-    )
+    nombres_nuevos = [nid.split('/')[-1] for nid in new_assets_cob]
 
     for d_id in (local_ids_cob - remote_ids_cob):
         cur.execute("DELETE FROM assets WHERE asset_id = ?", (d_id,))
         cur.execute("DELETE FROM stats WHERE asset_id = ?", (d_id,))
-
-    for d_id in (local_ids_agri - remote_ids_agri):
-        cur.execute("DELETE FROM stats_agricultura WHERE asset_id = ?", (d_id,))
 
     for asset in remote_assets_cob:
         a_id = asset.get('id')
@@ -150,46 +136,6 @@ def sincronizar_todo_interno():
                     cur.executemany(
                         "INSERT OR REPLACE INTO stats VALUES (?, ?, ?, ?)",
                         rows_cob
-                    )
-
-    for asset in remote_assets_agri:
-        a_id = asset.get('id')
-        if not a_id:
-            continue
-        label = a_id.split('/')[-1]
-
-        if not re.search(r'^STATS_TRANSVERSAL_AGRICULTURA', label):
-            continue
-
-        match = re.search(r'_R(\d+)$', label)
-        region_id = match.group(1) if match else None
-
-        if a_id in new_assets_agri:
-            raw_data = leer_stats_procesadas(a_id)
-
-            if raw_data:
-                rows_agri = []
-
-                for r in raw_data:
-                    year = normalize_year(r.get('year'))
-                    if year is None:
-                        continue
-
-                    for k, v in r.items():
-                        if k in ['year', 'version', 'system:index']:
-                            continue
-
-                        try:
-                            value = float(v)
-                        except (ValueError, TypeError):
-                            continue
-
-                        rows_agri.append((a_id, year, k, value))
-
-                if rows_agri:
-                    cur.executemany(
-                        "INSERT OR REPLACE INTO stats_agricultura VALUES (?, ?, ?, ?)",
-                        rows_agri
                     )
 
     try:
