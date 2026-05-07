@@ -4,37 +4,57 @@ Utiliza la base de datos local para alimentar la interfaz de usuario
 """
 
 import ee
-from data.db import (
-    listar_assets_bioma_db,
-    listar_versiones_region_db,
-    obtener_biomas_db,
-    obtener_regiones_por_bioma_db,
-)
+import re
+import streamlit as st
+from data.db import get_conn
 
 def obtener_biomas():
     """
     Retorna los biomas únicos registrados en la base de datos local.
     """
-    return obtener_biomas_db()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT bioma FROM assets WHERE bioma IS NOT NULL ORDER BY bioma ASC")
+    rows = cur.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
 def regiones_por_bioma(bioma_nombre):
     """
     Retorna las regiones asociadas a un bioma específico desde la base de datos local.
     """
-    return obtener_regiones_por_bioma_db(bioma_nombre)
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT region_id FROM assets WHERE bioma = ? ORDER BY region_id ASC", (bioma_nombre,))
+    rows = cur.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
 def listar_versiones_disponibles(region_id):
     """
     Consulta las versiones de assets disponibles para una región en la base de datos.
     """
-    return listar_versiones_region_db(str(region_id))
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT asset_id FROM assets WHERE region_id = ? ORDER BY asset_id DESC", (str(region_id),))
+    rows = cur.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
 
 def listar_assets_por_bioma(bioma_nombre):
     """
     Retorna todos los assets asociados al bioma seleccionado.
     """
-    return listar_assets_bioma_db(bioma_nombre)
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT asset_id FROM assets WHERE bioma = ? ORDER BY asset_id DESC",
+        (bioma_nombre,)
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
 def leer_stats_procesadas(asset_id):
     """

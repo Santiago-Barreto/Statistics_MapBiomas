@@ -1,7 +1,9 @@
-"""Pruebas de robustez para sincronización con Supabase."""
+"""Pruebas de robustez para sincronización y manejo de SQLite."""
 
+import sqlite3
 import sys
 import types
+from pathlib import Path
 
 if "streamlit" not in sys.modules:
     sys.modules["streamlit"] = types.SimpleNamespace()
@@ -9,8 +11,60 @@ if "streamlit" not in sys.modules:
 from sync import manager
 
 
-def test_sincronizar_todo_interno_omite_assets_invalidos(monkeypatch):
-    inserted_assets = []
+def _crear_schema_basico(path_db: str) -> None:
+    conn = sqlite3.connect(path_db)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS assets (
+            asset_id TEXT PRIMARY KEY,
+            region_id TEXT,
+            bioma TEXT,
+            label TEXT,
+            last_sync INTEGER
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stats (
+            asset_id TEXT,
+            year INTEGER,
+            class_id TEXT,
+            area_ha REAL,
+            PRIMARY KEY (asset_id, year, class_id)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stats_agricultura (
+            asset_id TEXT,
+            year INTEGER,
+            metric TEXT,
+            value REAL,
+            PRIMARY KEY (asset_id, year, metric)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS control_sincro (
+            id INTEGER PRIMARY KEY,
+            ultima_fecha INTEGER,
+            total_nuevos INTEGER,
+            nombres_nuevos TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_sincronizar_todo_interno_omite_assets_invalidos(monkeypatch, tmp_path: Path):
+    db_path = str(tmp_path / "sync_test.db")
+    _crear_schema_basico(db_path)
+    monkeypatch.setattr("data.db.DB_PATH", db_path)
 
     class _FakeEEData:
         @staticmethod
@@ -45,48 +99,40 @@ def test_sincronizar_todo_interno_omite_assets_invalidos(monkeypatch):
     monkeypatch.setattr(manager.ee, "Reducer", _FakeReducer, raising=False)
     monkeypatch.setattr(manager.ee, "FeatureCollection", _FakeFeatureCollection, raising=False)
     monkeypatch.setattr(manager, "leer_stats_procesadas", lambda _a_id: [])
-    monkeypatch.setattr(manager, "listar_assets_cob_locales_db", lambda: set())
-    monkeypatch.setattr(manager, "listar_assets_agri_locales_db", lambda: set())
-    monkeypatch.setattr(manager, "borrar_stats_db", lambda _ids: None)
-    monkeypatch.setattr(manager, "borrar_assets_db", lambda _ids: None)
-    monkeypatch.setattr(manager, "borrar_stats_agri_db", lambda _ids: None)
-    monkeypatch.setattr(manager, "upsert_assets_db", lambda rows: inserted_assets.extend(rows))
-    monkeypatch.setattr(manager, "upsert_stats_db", lambda _rows: None)
-    monkeypatch.setattr(manager, "upsert_stats_agri_db", lambda _rows: None)
 
     total, _nombres = manager.sincronizar_todo_interno()
 
+    conn = sqlite3.connect(db_path)
+    total_assets = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
+    conn.close()
+
     assert total == 1
-    assert len(inserted_assets) == 1
+    assert total_assets == 1
 
 
-def test_chequeo_automatico_sincro_adquiere_lock_y_actualiza(monkeypatch):
+def test_chequeo_automatico_sincro_tolera_locked_en_control(monkeypatch):
     monkeypatch.setattr(manager, "obtener_resumen_sincro", lambda: (None, 0, ""))
-    monkeypatch.setattr(manager, "obtener_resumen_sincro_db", lambda: (None, 0, ""))
     monkeypatch.setattr(manager, "sincronizar_todo_interno", lambda: (2, "A,B"))
-    monkeypatch.setattr(manager, "try_acquire_sync_lock", lambda _owner, ttl_seconds=120: True)
-    monkeypatch.setattr(manager, "release_sync_lock", lambda _owner: None)
-    saved = {}
-    monkeypatch.setattr(
-        manager,
-        "guardar_resumen_sincro_db",
-        lambda ultima_fecha, total, nombres: saved.update(
-            {"ultima_fecha": ultima_fecha, "total": total, "nombres": nombres}
-        ),
-    )
+
+    class _ConnConBloqueo:
+        intentos_global = 0
+
+        def cursor(self):
+            return self
+
+        def execute(self, *_args, **_kwargs):
+            _ConnConBloqueo.intentos_global += 1
+            if _ConnConBloqueo.intentos_global == 1:
+                raise sqlite3.OperationalError("database is locked")
+
+        def commit(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(manager, "get_conn", lambda: _ConnConBloqueo())
 
     manager.chequeo_automatico_sincro()
 
-    assert saved["total"] == 2
-    assert saved["nombres"] == "A,B"
-
-
-def test_chequeo_automatico_sincro_sale_si_no_hay_lock(monkeypatch):
-    monkeypatch.setattr(manager, "obtener_resumen_sincro", lambda: (None, 0, ""))
-    monkeypatch.setattr(manager, "try_acquire_sync_lock", lambda _owner, ttl_seconds=120: False)
-    called = {"sync": 0}
-    monkeypatch.setattr(manager, "sincronizar_todo_interno", lambda: called.update({"sync": 1}))
-
-    manager.chequeo_automatico_sincro()
-
-    assert called["sync"] == 0
+    assert _ConnConBloqueo.intentos_global >= 2

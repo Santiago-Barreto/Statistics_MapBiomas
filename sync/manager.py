@@ -7,21 +7,8 @@ descubrimientos de assets en la infraestructura de GEE.
 import time
 import ee
 import re
-import uuid
-from data.db import (
-    borrar_assets_db,
-    borrar_stats_agri_db,
-    borrar_stats_db,
-    guardar_resumen_sincro_db,
-    listar_assets_agri_locales_db,
-    listar_assets_cob_locales_db,
-    obtener_resumen_sincro_db,
-    release_sync_lock,
-    try_acquire_sync_lock,
-    upsert_assets_db,
-    upsert_stats_agri_db,
-    upsert_stats_db,
-)
+import sqlite3
+from data.db import get_conn
 from data.year_norm import normalize_year
 from gee.assets import leer_stats_procesadas
 from config import ASSET_PARENT, ASSET_REGIONES, ASSET_PARENT_AGRICULTURA
@@ -32,7 +19,12 @@ def obtener_resumen_sincro():
     Recupera los metadatos del último proceso de sincronización, 
     incluyendo fecha, cantidad de novedades y etiquetas.
     """
-    return obtener_resumen_sincro_db()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT ultima_fecha, total_nuevos, nombres_nuevos FROM control_sincro WHERE id = 1")
+    res = cur.fetchone()
+    conn.close()
+    return res if res else (None, 0, "")
 
 def chequeo_automatico_sincro():
     """
@@ -43,24 +35,26 @@ def chequeo_automatico_sincro():
     ultima_fecha = res_sincro[0]
     ahora = int(time.time())
     
-    if ultima_fecha and (ahora - ultima_fecha) <= 600:
-        return
-
-    owner_id = str(uuid.uuid4())
-    if not try_acquire_sync_lock(owner_id, ttl_seconds=120):
-        return
-
-    try:
-        # Doble chequeo dentro del lock para evitar trabajo redundante.
-        ultima_fecha_locked, _, _ = obtener_resumen_sincro_db()
-        ahora_locked = int(time.time())
-        if ultima_fecha_locked and (ahora_locked - ultima_fecha_locked) <= 600:
-            return
-
+    if not ultima_fecha or (ahora - ultima_fecha) > 600:
         total, nombres = sincronizar_todo_interno()
-        guardar_resumen_sincro_db(ahora_locked, total, nombres)
-    finally:
-        release_sync_lock(owner_id)
+        for intento in range(3):
+            conn = None
+            try:
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT OR REPLACE INTO control_sincro (id, ultima_fecha, total_nuevos, nombres_nuevos) 
+                    VALUES (1, ?, ?, ?)
+                """, (ahora, total, nombres))
+                conn.commit()
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or intento == 2:
+                    break
+                time.sleep(0.5 * (intento + 1))
+            finally:
+                if conn is not None:
+                    conn.close()
 
 def sincronizar_todo_interno():
     """
@@ -68,10 +62,16 @@ def sincronizar_todo_interno():
     Coberturas y Agricultura, descarga estadísticas para nuevos assets y 
     retorna un resumen de los cambios realizados.
     """
+    conn = None
+
     try:
+        conn = get_conn()
+        cur = conn.cursor()
         remote_assets_cob = ee.data.listAssets({'parent': ASSET_PARENT}).get('assets', [])
         remote_assets_agri = ee.data.listAssets({'parent': ASSET_PARENT_AGRICULTURA}).get('assets', [])
     except Exception:
+        if conn is not None:
+            conn.close()
         return 0, ""
 
     remote_ids_cob = {a.get('id') for a in remote_assets_cob if a.get('id')}
@@ -87,8 +87,11 @@ def sincronizar_todo_interno():
     listas = bioma_mapping_raw.get('list', [[], []])
     bioma_dict = dict(zip([str(x) for x in listas[0]], listas[1]))
 
-    local_ids_cob = listar_assets_cob_locales_db()
-    local_ids_agri = listar_assets_agri_locales_db()
+    cur.execute("SELECT asset_id FROM assets")
+    local_ids_cob = {r[0] for r in cur.fetchall()}
+
+    cur.execute("SELECT DISTINCT asset_id FROM stats_agricultura")
+    local_ids_agri = {r[0] for r in cur.fetchall()}
 
     new_assets_cob = remote_ids_cob - local_ids_cob
     new_assets_agri = remote_ids_agri - local_ids_agri
@@ -99,14 +102,12 @@ def sincronizar_todo_interno():
     )
 
     for d_id in (local_ids_cob - remote_ids_cob):
-        borrar_stats_db([d_id])
-        borrar_assets_db([d_id])
+        cur.execute("DELETE FROM assets WHERE asset_id = ?", (d_id,))
+        cur.execute("DELETE FROM stats WHERE asset_id = ?", (d_id,))
 
     for d_id in (local_ids_agri - remote_ids_agri):
-        borrar_stats_agri_db([d_id])
+        cur.execute("DELETE FROM stats_agricultura WHERE asset_id = ?", (d_id,))
 
-    rows_assets = []
-    rows_cob = []
     for asset in remote_assets_cob:
         a_id = asset.get('id')
         if not a_id:
@@ -116,20 +117,17 @@ def sincronizar_todo_interno():
         region_id = label_norm.split('_V')[0].replace('R', '')
         bioma = bioma_dict.get(region_id, "Sin Bioma")
 
-        rows_assets.append(
-            {
-                "asset_id": a_id,
-                "region_id": region_id,
-                "bioma": bioma,
-                "label": label,
-                "last_sync": int(time.time()),
-            }
+        cur.execute(
+            "INSERT OR REPLACE INTO assets VALUES (?, ?, ?, ?, ?)",
+            (a_id, region_id, bioma, label, int(time.time()))
         )
 
         if a_id in new_assets_cob:
             raw_data = leer_stats_procesadas(a_id)
 
             if raw_data:
+                rows_cob = []
+
                 for r in raw_data:
                     year = normalize_year(r.get('year'))
                     if year is None:
@@ -146,16 +144,14 @@ def sincronizar_todo_interno():
                         except (ValueError, TypeError):
                             continue
 
-                        rows_cob.append(
-                            {
-                                "asset_id": a_id,
-                                "year": year,
-                                "class_id": k_norm.split('_')[0],
-                                "area_ha": value,
-                            }
-                        )
+                        rows_cob.append((a_id, year, k_norm.split('_')[0], value))
 
-    rows_agri = []
+                if rows_cob:
+                    cur.executemany(
+                        "INSERT OR REPLACE INTO stats VALUES (?, ?, ?, ?)",
+                        rows_cob
+                    )
+
     for asset in remote_assets_agri:
         a_id = asset.get('id')
         if not a_id:
@@ -165,10 +161,15 @@ def sincronizar_todo_interno():
         if not re.search(r'^STATS_TRANSVERSAL_AGRICULTURA', label):
             continue
 
+        match = re.search(r'_R(\d+)$', label)
+        region_id = match.group(1) if match else None
+
         if a_id in new_assets_agri:
             raw_data = leer_stats_procesadas(a_id)
 
             if raw_data:
+                rows_agri = []
+
                 for r in raw_data:
                     year = normalize_year(r.get('year'))
                     if year is None:
@@ -183,17 +184,20 @@ def sincronizar_todo_interno():
                         except (ValueError, TypeError):
                             continue
 
-                        rows_agri.append(
-                            {
-                                "asset_id": a_id,
-                                "year": year,
-                                "metric": k,
-                                "value": value,
-                            }
-                        )
+                        rows_agri.append((a_id, year, k, value))
 
-    upsert_assets_db(rows_assets)
-    upsert_stats_db(rows_cob)
-    upsert_stats_agri_db(rows_agri)
+                if rows_agri:
+                    cur.executemany(
+                        "INSERT OR REPLACE INTO stats_agricultura VALUES (?, ?, ?, ?)",
+                        rows_agri
+                    )
+
+    try:
+        conn.commit()
+    except sqlite3.OperationalError:
+        conn.rollback()
+        return 0, ""
+    finally:
+        conn.close()
 
     return len(nombres_nuevos), ", ".join(nombres_nuevos)
