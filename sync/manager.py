@@ -35,7 +35,9 @@ def chequeo_automatico_sincro():
     ahora = int(time.time())
     
     if not ultima_fecha or (ahora - ultima_fecha) > 600:
-        total, nombres = sincronizar_todo_interno()
+        total, nombres, ok = sincronizar_todo_interno()
+        if not ok:
+            return
         for intento in range(3):
             conn = None
             try:
@@ -69,7 +71,7 @@ def sincronizar_todo_interno():
     except Exception:
         if conn is not None:
             conn.close()
-        return 0, ""
+        return 0, "", False
 
     remote_ids_cob = {a.get('id') for a in remote_assets_cob if a.get('id')}
 
@@ -86,11 +88,25 @@ def sincronizar_todo_interno():
     cur.execute("SELECT asset_id FROM assets")
     local_ids_cob = {r[0] for r in cur.fetchall()}
 
+    # Salvaguarda: si la consulta remota devuelve vacío pero ya hay datos locales,
+    # asumimos fallo transitorio (autenticación/conectividad) y no borramos nada.
+    if not remote_ids_cob and local_ids_cob:
+        conn.close()
+        return 0, "", False
+
+    # Salvaguarda adicional: evita borrados masivos por respuestas remotas parciales.
+    assets_a_borrar = local_ids_cob - remote_ids_cob
+    if local_ids_cob:
+        ratio_borrado = len(assets_a_borrar) / len(local_ids_cob)
+        if ratio_borrado > 0.7:
+            conn.close()
+            return 0, "", False
+
     new_assets_cob = remote_ids_cob - local_ids_cob
 
     nombres_nuevos = [nid.split('/')[-1] for nid in new_assets_cob]
 
-    for d_id in (local_ids_cob - remote_ids_cob):
+    for d_id in assets_a_borrar:
         cur.execute("DELETE FROM assets WHERE asset_id = ?", (d_id,))
         cur.execute("DELETE FROM stats WHERE asset_id = ?", (d_id,))
 
@@ -142,8 +158,8 @@ def sincronizar_todo_interno():
         conn.commit()
     except sqlite3.OperationalError:
         conn.rollback()
-        return 0, ""
+        return 0, "", False
     finally:
         conn.close()
 
-    return len(nombres_nuevos), ", ".join(nombres_nuevos)
+    return len(nombres_nuevos), ", ".join(nombres_nuevos), True

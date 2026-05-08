@@ -7,7 +7,9 @@ el registro de auditoría de sincronización automática.
 import sqlite3
 import os
 
-DB_PATH = "data/mapbiomas.db"
+# Ruta absoluta estable para evitar que Streamlit use una BD distinta
+# cuando la app se ejecute desde otro directorio de trabajo.
+DB_PATH = os.path.join(os.path.dirname(__file__), "mapbiomas.db")
 
 def get_conn():
     """

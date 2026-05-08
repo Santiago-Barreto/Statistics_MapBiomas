@@ -89,19 +89,20 @@ def test_sincronizar_todo_interno_omite_assets_invalidos(monkeypatch, tmp_path: 
     monkeypatch.setattr(manager.ee, "FeatureCollection", _FakeFeatureCollection, raising=False)
     monkeypatch.setattr(manager, "leer_stats_procesadas", lambda _a_id: [])
 
-    total, _nombres = manager.sincronizar_todo_interno()
+    total, _nombres, ok = manager.sincronizar_todo_interno()
 
     conn = sqlite3.connect(db_path)
     total_assets = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
     conn.close()
 
     assert total == 1
+    assert ok is True
     assert total_assets == 1
 
 
 def test_chequeo_automatico_sincro_tolera_locked_en_control(monkeypatch):
     monkeypatch.setattr(manager, "obtener_resumen_sincro", lambda: (None, 0, ""))
-    monkeypatch.setattr(manager, "sincronizar_todo_interno", lambda: (2, "A,B"))
+    monkeypatch.setattr(manager, "sincronizar_todo_interno", lambda: (2, "A,B", True))
 
     class _ConnConBloqueo:
         intentos_global = 0
