@@ -100,9 +100,40 @@ def test_sincronizar_todo_interno_omite_assets_invalidos(monkeypatch, tmp_path: 
     assert total_assets == 1
 
 
+def test_rellenar_stats_faltantes_desde_gee_inserta_filas(monkeypatch, tmp_path: Path):
+    db_path = str(tmp_path / "fill_stats.db")
+    _crear_schema_basico(db_path)
+    monkeypatch.setattr("data.db.DB_PATH", db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO assets VALUES (?, ?, ?, ?, ?)",
+        ("projects/test/R30477_V11", "30477", "Andes", "R30477_V11", 0),
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(
+        manager,
+        "leer_stats_procesadas",
+        lambda _aid: [{"year": 2020, "1": 10.5, "system:index": "x"}],
+    )
+
+    assert manager.rellenar_stats_faltantes_desde_gee() is True
+
+    conn = sqlite3.connect(db_path)
+    n = conn.execute(
+        "SELECT COUNT(*) FROM stats WHERE asset_id = ?",
+        ("projects/test/R30477_V11",),
+    ).fetchone()[0]
+    conn.close()
+    assert n == 1
+
+
 def test_chequeo_automatico_sincro_tolera_locked_en_control(monkeypatch):
     monkeypatch.setattr(manager, "obtener_resumen_sincro", lambda: (None, 0, ""))
     monkeypatch.setattr(manager, "sincronizar_todo_interno", lambda: (2, "A,B", True))
+    monkeypatch.setattr(manager, "hay_assets_sin_stats", lambda: False)
 
     class _ConnConBloqueo:
         intentos_global = 0

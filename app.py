@@ -9,7 +9,7 @@ import streamlit as st
 from config import MODOS_APP
 from data.db import inicializar_db
 from gee.init import inicializar_gee
-from sync.manager import chequeo_automatico_sincro
+from sync.manager import chequeo_automatico_sincro, rellenar_stats_faltantes_desde_gee
 from data.processing import cargar_datos_totales, cargar_datos_bioma, cargar_aportes_regionales_bioma
 from ui.sidebar import render_sidebar
 from ui.map import render_visual_inspector
@@ -171,6 +171,16 @@ def main():
             else:
                 data_dict = cargar_datos_totales(version_sel)
                 aportes_regionales_df = None
+
+        if not data_dict:
+            rellenar_stats_faltantes_desde_gee(version_sel)
+            with st.spinner("Actualizando estadísticas desde GEE..."):
+                if scope == "bioma":
+                    data_dict = cargar_datos_bioma(version_sel, bioma_sel)
+                    aportes_regionales_df = cargar_aportes_regionales_bioma(version_sel)
+                else:
+                    data_dict = cargar_datos_totales(version_sel)
+                    aportes_regionales_df = None
 
         if not data_dict:
             st.error("No se encontraron datos para la selección realizada.")

@@ -13,6 +13,78 @@ from gee.assets import leer_stats_procesadas
 from config import ASSET_PARENT, ASSET_REGIONES
 
 
+def hay_assets_sin_stats():
+    """True si existen assets en SQLite sin ninguna fila en stats."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT 1 FROM assets a
+        WHERE NOT EXISTS (SELECT 1 FROM stats s WHERE s.asset_id = a.asset_id)
+        LIMIT 1
+        """
+    )
+    existe = cur.fetchone() is not None
+    conn.close()
+    return existe
+
+
+def rellenar_stats_faltantes_desde_gee(asset_ids=None):
+    """
+    Descarga estadísticas desde GEE para assets que existen localmente pero
+    tienen tabla stats vacía (p. ej. fallo anterior de red o sincro saltada por el cronómetro).
+    Si asset_ids se informa, solo considera ese subconjunto.
+    Devuelve True si el commit SQLite fue exitoso.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+
+    try:
+        if asset_ids:
+            placeholders = ",".join(["?"] * len(asset_ids))
+            cur.execute(
+                f"""
+                SELECT DISTINCT a.asset_id FROM assets a
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM stats s WHERE s.asset_id = a.asset_id
+                )
+                AND a.asset_id IN ({placeholders})
+                """,
+                list(asset_ids),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT a.asset_id FROM assets a
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM stats s WHERE s.asset_id = a.asset_id
+                )
+                """
+            )
+
+        pendientes = [row[0] for row in cur.fetchall()]
+
+        for a_id in pendientes:
+            raw_data = leer_stats_procesadas(a_id)
+            if not raw_data:
+                continue
+
+            rows_cob = _construir_rows_stats(a_id, raw_data)
+            if rows_cob:
+                cur.executemany(
+                    "INSERT OR REPLACE INTO stats VALUES (?, ?, ?, ?)",
+                    rows_cob,
+                )
+
+        conn.commit()
+        return True
+    except sqlite3.OperationalError:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
 def _construir_rows_stats(asset_id, raw_data):
     """
     Convierte propiedades crudas de GEE en filas para la tabla stats.
@@ -62,26 +134,30 @@ def chequeo_automatico_sincro():
     
     if not ultima_fecha or (ahora - ultima_fecha) > 600:
         total, nombres, ok = sincronizar_todo_interno()
-        if not ok:
-            return
-        for intento in range(3):
-            conn = None
-            try:
-                conn = get_conn()
-                cur = conn.cursor()
-                cur.execute("""
-                    INSERT OR REPLACE INTO control_sincro (id, ultima_fecha, total_nuevos, nombres_nuevos) 
-                    VALUES (1, ?, ?, ?)
-                """, (ahora, total, nombres))
-                conn.commit()
-                break
-            except sqlite3.OperationalError as exc:
-                if "locked" not in str(exc).lower() or intento == 2:
+        if ok:
+            for intento in range(3):
+                conn = None
+                try:
+                    conn = get_conn()
+                    cur = conn.cursor()
+                    cur.execute("""
+                        INSERT OR REPLACE INTO control_sincro (id, ultima_fecha, total_nuevos, nombres_nuevos) 
+                        VALUES (1, ?, ?, ?)
+                    """, (ahora, total, nombres))
+                    conn.commit()
                     break
-                time.sleep(0.5 * (intento + 1))
-            finally:
-                if conn is not None:
-                    conn.close()
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower() or intento == 2:
+                        break
+                    time.sleep(0.5 * (intento + 1))
+                finally:
+                    if conn is not None:
+                        conn.close()
+
+    # Aunque el cronómetro de sync no permita lista remota nueva, los assets
+    # locales pueden seguir sin stats (GEE falló antes o BD heredada). Rellenar siempre el hueco.
+    if hay_assets_sin_stats():
+        rellenar_stats_faltantes_desde_gee()
 
 def sincronizar_todo_interno():
     """
