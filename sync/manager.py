@@ -13,6 +13,32 @@ from gee.assets import leer_stats_procesadas
 from config import ASSET_PARENT, ASSET_REGIONES
 
 
+def _construir_rows_stats(asset_id, raw_data):
+    """
+    Convierte propiedades crudas de GEE en filas para la tabla stats.
+    """
+    rows_cob = []
+    for r in raw_data:
+        year = normalize_year(r.get('year'))
+        if year is None:
+            continue
+
+        for k, v in r.items():
+            k_norm = k.replace('-', '_')
+
+            if k_norm in ['year', 'version', 'system:index', 'clase_transversal', 'regionId']:
+                continue
+
+            try:
+                value = float(v)
+            except (ValueError, TypeError):
+                continue
+
+            rows_cob.append((asset_id, year, k_norm.split('_')[0], value))
+
+    return rows_cob
+
+
 def obtener_resumen_sincro():
     """
     Recupera los metadatos del último proceso de sincronización, 
@@ -94,21 +120,14 @@ def sincronizar_todo_interno():
         conn.close()
         return 0, "", False
 
-    # Salvaguarda adicional: evita borrados masivos por respuestas remotas parciales.
-    assets_a_borrar = local_ids_cob - remote_ids_cob
-    if local_ids_cob:
-        ratio_borrado = len(assets_a_borrar) / len(local_ids_cob)
-        if ratio_borrado > 0.7:
-            conn.close()
-            return 0, "", False
-
     new_assets_cob = remote_ids_cob - local_ids_cob
 
     nombres_nuevos = [nid.split('/')[-1] for nid in new_assets_cob]
-
-    for d_id in assets_a_borrar:
-        cur.execute("DELETE FROM assets WHERE asset_id = ?", (d_id,))
-        cur.execute("DELETE FROM stats WHERE asset_id = ?", (d_id,))
+    # Política de persistencia local: no borrar assets/estadísticas de forma automática.
+    # Si hay inconsistencias remotas temporales, la base local se conserva como caché.
+    cur.execute("SELECT DISTINCT asset_id FROM stats")
+    stats_ids = {r[0] for r in cur.fetchall()}
+    assets_sin_stats = (remote_ids_cob & local_ids_cob) - stats_ids
 
     for asset in remote_assets_cob:
         a_id = asset.get('id')
@@ -124,29 +143,11 @@ def sincronizar_todo_interno():
             (a_id, region_id, bioma, label, int(time.time()))
         )
 
-        if a_id in new_assets_cob:
+        if a_id in new_assets_cob or a_id in assets_sin_stats:
             raw_data = leer_stats_procesadas(a_id)
 
             if raw_data:
-                rows_cob = []
-
-                for r in raw_data:
-                    year = normalize_year(r.get('year'))
-                    if year is None:
-                        continue
-
-                    for k, v in r.items():
-                        k_norm = k.replace('-', '_')
-
-                        if k_norm in ['year', 'version', 'system:index', 'clase_transversal', 'regionId']:
-                            continue
-
-                        try:
-                            value = float(v)
-                        except (ValueError, TypeError):
-                            continue
-
-                        rows_cob.append((a_id, year, k_norm.split('_')[0], value))
+                rows_cob = _construir_rows_stats(a_id, raw_data)
 
                 if rows_cob:
                     cur.executemany(
