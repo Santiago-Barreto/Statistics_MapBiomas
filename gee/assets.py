@@ -6,7 +6,7 @@ Utiliza la base de datos local para alimentar la interfaz de usuario
 import ee
 import re
 import streamlit as st
-from data.db import get_conn
+from data.db import get_conn, ph
 
 def obtener_biomas():
     """
@@ -25,7 +25,10 @@ def regiones_por_bioma(bioma_nombre):
     """
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT DISTINCT region_id FROM assets WHERE bioma = ? ORDER BY region_id ASC", (bioma_nombre,))
+    cur.execute(
+        f"SELECT DISTINCT region_id FROM assets WHERE bioma = {ph()} ORDER BY region_id ASC",
+        (bioma_nombre,),
+    )
     rows = cur.fetchall()
     conn.close()
     return [r[0] for r in rows]
@@ -36,7 +39,10 @@ def listar_versiones_disponibles(region_id):
     """
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT asset_id FROM assets WHERE region_id = ? ORDER BY asset_id DESC", (str(region_id),))
+    cur.execute(
+        f"SELECT asset_id FROM assets WHERE region_id = {ph()} ORDER BY asset_id DESC",
+        (str(region_id),),
+    )
     rows = cur.fetchall()
     conn.close()
     return [r[0] for r in rows]
@@ -49,8 +55,8 @@ def listar_assets_por_bioma(bioma_nombre):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT asset_id FROM assets WHERE bioma = ? ORDER BY asset_id DESC",
-        (bioma_nombre,)
+        f"SELECT asset_id FROM assets WHERE bioma = {ph()} ORDER BY asset_id DESC",
+        (bioma_nombre,),
     )
     rows = cur.fetchall()
     conn.close()

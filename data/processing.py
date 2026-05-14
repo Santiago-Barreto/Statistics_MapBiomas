@@ -6,7 +6,7 @@ en estructuras de Pandas DataFrame optimizadas para análisis y visualización.
 
 import pandas as pd
 import re
-from data.db import get_conn
+from data.db import get_conn, ph_join
 from data.year_norm import normalize_year
 
 
@@ -23,7 +23,7 @@ def cargar_datos_totales(asset_ids):
         return {}
     
     conn = get_conn()
-    placeholders = ','.join(['?'] * len(asset_ids))
+    placeholders = ph_join(len(asset_ids))
     query = f"""
         SELECT asset_id, year, class_id, area_ha
         FROM stats 
@@ -66,7 +66,7 @@ def cargar_datos_bioma(asset_ids, biome_name):
         return {}
 
     conn = get_conn()
-    placeholders = ",".join(["?"] * len(asset_ids))
+    placeholders = ph_join(len(asset_ids))
     query = f"""
         SELECT year, class_id, SUM(area_ha) AS area_ha
         FROM stats
@@ -115,7 +115,7 @@ def cargar_aportes_regionales_bioma(asset_ids):
         return pd.DataFrame()
 
     conn = get_conn()
-    placeholders = ",".join(["?"] * len(asset_ids))
+    placeholders = ph_join(len(asset_ids))
     query = f"""
         SELECT asset_id, year, class_id, area_ha
         FROM stats

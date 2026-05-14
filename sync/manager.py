@@ -6,15 +6,21 @@ descubrimientos de assets en la infraestructura de GEE.
 
 import time
 import ee
-import sqlite3
-from data.db import get_conn
+from data.db import (
+    DB_OPERATIONAL_ERRORS,
+    get_conn,
+    insert_assets_upsert_sql,
+    insert_stats_upsert_sql,
+    ph_join,
+    upsert_control_sincro_sql,
+)
 from data.year_norm import normalize_year
 from gee.assets import leer_stats_procesadas
 from config import ASSET_PARENT, ASSET_REGIONES
 
 
 def hay_assets_sin_stats():
-    """True si existen assets en SQLite sin ninguna fila en stats."""
+    """True si existen assets en la BD sin ninguna fila en stats."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
@@ -34,14 +40,14 @@ def rellenar_stats_faltantes_desde_gee(asset_ids=None):
     Descarga estadísticas desde GEE para assets que existen localmente pero
     tienen tabla stats vacía (p. ej. fallo anterior de red o sincro saltada por el cronómetro).
     Si asset_ids se informa, solo considera ese subconjunto.
-    Devuelve True si el commit SQLite fue exitoso.
+    Devuelve True si el commit en la base de datos fue exitoso.
     """
     conn = get_conn()
     cur = conn.cursor()
 
     try:
         if asset_ids:
-            placeholders = ",".join(["?"] * len(asset_ids))
+            placeholders = ph_join(len(asset_ids))
             cur.execute(
                 f"""
                 SELECT DISTINCT a.asset_id FROM assets a
@@ -71,14 +77,11 @@ def rellenar_stats_faltantes_desde_gee(asset_ids=None):
 
             rows_cob = _construir_rows_stats(a_id, raw_data)
             if rows_cob:
-                cur.executemany(
-                    "INSERT OR REPLACE INTO stats VALUES (?, ?, ?, ?)",
-                    rows_cob,
-                )
+                cur.executemany(insert_stats_upsert_sql(), rows_cob)
 
         conn.commit()
         return True
-    except sqlite3.OperationalError:
+    except DB_OPERATIONAL_ERRORS:
         conn.rollback()
         return False
     finally:
@@ -140,13 +143,10 @@ def chequeo_automatico_sincro():
                 try:
                     conn = get_conn()
                     cur = conn.cursor()
-                    cur.execute("""
-                        INSERT OR REPLACE INTO control_sincro (id, ultima_fecha, total_nuevos, nombres_nuevos) 
-                        VALUES (1, ?, ?, ?)
-                    """, (ahora, total, nombres))
+                    cur.execute(upsert_control_sincro_sql(), (ahora, total, nombres))
                     conn.commit()
                     break
-                except sqlite3.OperationalError as exc:
+                except DB_OPERATIONAL_ERRORS as exc:
                     if "locked" not in str(exc).lower() or intento == 2:
                         break
                     time.sleep(0.5 * (intento + 1))
@@ -215,8 +215,8 @@ def sincronizar_todo_interno():
         bioma = bioma_dict.get(region_id, "Sin Bioma")
 
         cur.execute(
-            "INSERT OR REPLACE INTO assets VALUES (?, ?, ?, ?, ?)",
-            (a_id, region_id, bioma, label, int(time.time()))
+            insert_assets_upsert_sql(),
+            (a_id, region_id, bioma, label, int(time.time())),
         )
 
         if a_id in new_assets_cob or a_id in assets_sin_stats:
@@ -226,14 +226,11 @@ def sincronizar_todo_interno():
                 rows_cob = _construir_rows_stats(a_id, raw_data)
 
                 if rows_cob:
-                    cur.executemany(
-                        "INSERT OR REPLACE INTO stats VALUES (?, ?, ?, ?)",
-                        rows_cob
-                    )
+                    cur.executemany(insert_stats_upsert_sql(), rows_cob)
 
     try:
         conn.commit()
-    except sqlite3.OperationalError:
+    except DB_OPERATIONAL_ERRORS:
         conn.rollback()
         return 0, "", False
     finally:
