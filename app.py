@@ -7,7 +7,7 @@ y renderizado de los componentes principales de la aplicación.
 
 import streamlit as st
 from config import MODOS_APP
-from data.db import inicializar_db
+from data.db import inicializar_db, is_postgres
 from gee.init import inicializar_gee
 from sync.manager import chequeo_automatico_sincro, rellenar_stats_faltantes_desde_gee
 from data.processing import cargar_datos_totales, cargar_datos_bioma, cargar_aportes_regionales_bioma
@@ -26,12 +26,14 @@ def configurar_app():
     """
     Define la configuración técnica de la página y estilos CSS base.
     """
-    st.set_page_config(
-        page_title="MapBiomas Dashboard",
-        layout="wide",
-        page_icon="🌱",
-        initial_sidebar_state="expanded"
-    )
+    if "_st_page_config_hecho" not in st.session_state:
+        st.set_page_config(
+            page_title="MapBiomas Dashboard",
+            layout="wide",
+            page_icon="🌱",
+            initial_sidebar_state="expanded"
+        )
+        st.session_state._st_page_config_hecho = True
     st.markdown("""
         <style>
             /* No ocultar la barra superior completa: ahí está el control para reabrir el sidebar. */
@@ -126,7 +128,20 @@ def main():
     """
     configurar_app()
     iniciar_servicios_una_vez()
-    procesar_sincronizacion()
+
+    if "ultima_sincro" not in st.session_state:
+        if is_postgres():
+            st.info(
+                "**Primera sincronización con la base en la nube (Neon):** se descargan "
+                "assets y estadísticas desde Earth Engine. Suele tardar **varios minutos** "
+                "si la base está vacía; la pestaña puede parecer quieta pero el proceso sigue. "
+                "No cierres el navegador."
+            )
+            with st.spinner("Sincronizando con Google Earth Engine…"):
+                procesar_sincronizacion()
+            st.rerun()
+        else:
+            procesar_sincronizacion()
 
     if "thumbnails" not in st.session_state:
         st.session_state.thumbnails = None

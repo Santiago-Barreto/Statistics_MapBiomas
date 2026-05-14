@@ -119,7 +119,7 @@ def get_conn():
                 "DATABASE_URL está definido pero psycopg2 no está instalado. "
                 "Añade psycopg2-binary a requirements.txt."
             )
-        return psycopg2.connect(url)
+        return psycopg2.connect(url, connect_timeout=25)
 
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
