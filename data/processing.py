@@ -4,10 +4,28 @@ Transforma datos provenientes de la base de datos local o Google Earth Engine
 en estructuras de Pandas DataFrame optimizadas para análisis y visualización.
 """
 
+import sqlite3
+
 import pandas as pd
 import re
 from data.db import get_conn, ph_join
 from data.year_norm import normalize_year
+
+
+def _read_sql_df(conn, query, params):
+    """
+    pd.read_sql solo declara soporte explícito para SQLite y SQLAlchemy;
+    con psycopg2 pandas emite UserWarning. Usamos cursor + DataFrame en Postgres.
+    """
+    if isinstance(conn, sqlite3.Connection):
+        return pd.read_sql(query, conn, params=params)
+    cur = conn.cursor()
+    cur.execute(query, params or [])
+    if not cur.description:
+        return pd.DataFrame()
+    cols = [c[0] for c in cur.description]
+    rows = cur.fetchall()
+    return pd.DataFrame(rows, columns=cols)
 
 
 def _to_int_year(value):
@@ -31,7 +49,7 @@ def cargar_datos_totales(asset_ids):
         ORDER BY asset_id, year
     """
     
-    df_raw = pd.read_sql(query, conn, params=asset_ids)
+    df_raw = _read_sql_df(conn, query, asset_ids)
     conn.close()
 
     if df_raw.empty:
@@ -74,7 +92,7 @@ def cargar_datos_bioma(asset_ids, biome_name):
         GROUP BY year, class_id
         ORDER BY year
     """
-    df_raw = pd.read_sql(query, conn, params=asset_ids)
+    df_raw = _read_sql_df(conn, query, asset_ids)
     conn.close()
 
     if df_raw.empty:
@@ -122,7 +140,7 @@ def cargar_aportes_regionales_bioma(asset_ids):
         WHERE asset_id IN ({placeholders})
         ORDER BY asset_id, year
     """
-    df_raw = pd.read_sql(query, conn, params=asset_ids)
+    df_raw = _read_sql_df(conn, query, asset_ids)
     conn.close()
 
     if df_raw.empty:
