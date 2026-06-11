@@ -1,0 +1,129 @@
+"""
+Eliminación segura de assets en Google Earth Engine.
+
+Solo permite borrar assets hoja concretos (estadísticas por región/versión o
+imagen de clasificación COLOMBIA-{región}-{versión}). Bloquea carpetas padre
+como clasificacion-ft, clasificacion o ESTADISTICAS.
+"""
+
+import re
+
+from config import ASSET_PARENT, BASE_PATH_V1, BASE_PATH_VX
+
+PROTECTED_EXACT_PATHS = frozenset(
+    {
+        BASE_PATH_V1.rstrip("/"),
+        BASE_PATH_VX.rstrip("/"),
+        ASSET_PARENT.rstrip("/"),
+    }
+)
+
+_RE_LEAF_STATS = re.compile(r"^R\d+_V\d+", re.IGNORECASE)
+_RE_LEAF_CLASIF_V1 = re.compile(r"^COLOMBIA-\d+-1$", re.IGNORECASE)
+_RE_LEAF_CLASIF_VX = re.compile(r"^COLOMBIA-\d+-\d+$", re.IGNORECASE)
+
+
+def _normalizar_id(asset_id: str) -> str:
+    return (asset_id or "").strip().rstrip("/")
+
+
+def _prefijo_carpeta(base: str) -> str:
+    return base.rstrip("/") + "/"
+
+
+def es_ruta_protegida(asset_id: str) -> bool:
+    """True si el ID apunta a una carpeta padre que nunca debe borrarse."""
+    aid = _normalizar_id(asset_id)
+    if not aid:
+        return True
+    if aid in PROTECTED_EXACT_PATHS:
+        return True
+    for protected in PROTECTED_EXACT_PATHS:
+        if aid == protected:
+            return True
+        if aid.endswith("/" + protected.rsplit("/", 1)[-1]) and "COLOMBIA-" not in aid:
+            return True
+    if aid.endswith("/clasificacion-ft") or aid.endswith("/clasificacion"):
+        return True
+    if aid.endswith("/ESTADISTICAS"):
+        return True
+    return False
+
+
+def _es_stats_eliminable(asset_id: str) -> bool:
+    prefix = _prefijo_carpeta(ASSET_PARENT)
+    if not asset_id.startswith(prefix):
+        return False
+    leaf = asset_id[len(prefix) :]
+    if not leaf or "/" in leaf:
+        return False
+    return _RE_LEAF_STATS.match(leaf) is not None
+
+
+def _es_clasificacion_eliminable(asset_id: str) -> bool:
+    for base, leaf_re, forbid_v1 in (
+        (BASE_PATH_V1, _RE_LEAF_CLASIF_V1, False),
+        (BASE_PATH_VX, _RE_LEAF_CLASIF_VX, True),
+    ):
+        prefix = _prefijo_carpeta(base)
+        if not asset_id.startswith(prefix):
+            continue
+        leaf = asset_id[len(prefix) :]
+        if not leaf or "/" in leaf:
+            return False
+        if not leaf_re.match(leaf):
+            return False
+        if forbid_v1 and leaf.rsplit("-", 1)[-1] == "1":
+            return False
+        return True
+    return False
+
+
+def es_asset_eliminable(asset_id: str) -> tuple[bool, str | None]:
+    """
+    Valida si un asset puede eliminarse.
+
+    Returns:
+        (True, None) si es seguro borrarlo; (False, motivo) en caso contrario.
+    """
+    aid = _normalizar_id(asset_id)
+    if es_ruta_protegida(aid):
+        return False, f"Ruta protegida (carpeta): {aid}"
+    if _es_stats_eliminable(aid):
+        return True, None
+    if _es_clasificacion_eliminable(aid):
+        return True, None
+    return False, f"Asset fuera de patrón permitido: {aid}"
+
+
+def clasificacion_desde_estadisticas(stats_asset_id: str) -> str | None:
+    """
+    Deriva el asset de clasificación asociado a uno de estadísticas.
+
+    Ej.: .../ESTADISTICAS/R30435_V2 -> .../clasificacion-ft/COLOMBIA-30435-2
+    """
+    label = stats_asset_id.rsplit("/", 1)[-1]
+    region_match = re.search(r"R(\d+)", label, re.IGNORECASE)
+    version_match = re.search(r"_V(\d+)", label, re.IGNORECASE)
+    if not region_match or not version_match:
+        return None
+    region_id = region_match.group(1)
+    version_num = version_match.group(1)
+    base = BASE_PATH_V1 if version_num == "1" else BASE_PATH_VX
+    return f"{base.rstrip('/')}/COLOMBIA-{region_id}-{version_num}"
+
+
+def expandir_assets_para_eliminar(stats_ids: list[str]) -> list[str]:
+    """Incluye el asset de clasificación pareado por cada versión de estadísticas."""
+    resultado: list[str] = []
+    visto: set[str] = set()
+    for stats_id in stats_ids:
+        candidatos = [stats_id, clasificacion_desde_estadisticas(stats_id)]
+        for aid in candidatos:
+            if not aid:
+                continue
+            norm = _normalizar_id(aid)
+            if norm not in visto:
+                visto.add(norm)
+                resultado.append(norm)
+    return resultado

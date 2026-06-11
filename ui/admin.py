@@ -9,6 +9,11 @@ import time
 from data.db import get_conn, ph
 from config import ASSET_PARENT
 from gee.assets import listar_versiones_disponibles, listar_assets_por_bioma
+from gee.deletion import (
+    es_asset_eliminable,
+    es_ruta_protegida,
+    expandir_assets_para_eliminar,
+)
 
 def obtener_assets_totales():
     """
@@ -23,21 +28,42 @@ def obtener_assets_totales():
 
 def eliminar_assets_seleccionados(lista_ids):
     """
-    Elimina assets de Google Earth Engine y sus registros en la base de datos local.
+    Elimina assets de estadísticas en GEE y SQLite, y el asset de clasificación
+    pareado (clasificacion / clasificacion-ft). Rutas padre están bloqueadas.
     """
+    resultados = {"exitos": [], "errores": [], "bloqueados": []}
+    candidatos = expandir_assets_para_eliminar(lista_ids)
+    stats_prefix = ASSET_PARENT.rstrip("/") + "/"
+
+    para_eliminar = []
+    for a_id in candidatos:
+        if es_ruta_protegida(a_id):
+            resultados["bloqueados"].append(
+                f"BLOQUEADO: {a_id.split('/')[-1]} es una carpeta protegida"
+            )
+            continue
+        ok, motivo = es_asset_eliminable(a_id)
+        if not ok:
+            resultados["bloqueados"].append(f"BLOQUEADO: {motivo}")
+            continue
+        para_eliminar.append(a_id)
+
+    if not para_eliminar:
+        return resultados
+
     conn = get_conn()
     cur = conn.cursor()
-    resultados = {"exitos": [], "errores": []}
 
-    for a_id in lista_ids:
+    for a_id in para_eliminar:
         try:
             ee.data.deleteAsset(a_id)
-            cur.execute(f"DELETE FROM assets WHERE asset_id = {ph()}", (a_id,))
-            cur.execute(f"DELETE FROM stats WHERE asset_id = {ph()}", (a_id,))
+            if a_id.startswith(stats_prefix):
+                cur.execute(f"DELETE FROM assets WHERE asset_id = {ph()}", (a_id,))
+                cur.execute(f"DELETE FROM stats WHERE asset_id = {ph()}", (a_id,))
             resultados["exitos"].append(a_id)
         except Exception as e:
             resultados["errores"].append(f"Error en {a_id.split('/')[-1]}: {str(e)}")
-    
+
     conn.commit()
     conn.close()
     return resultados
@@ -66,6 +92,11 @@ def render_admin_zone(modo, region_id=None, bioma_sel=None):
         
         unique_key = f"admin_{modo}_{hash(tuple(version_pool))}"
         
+        st.caption(
+            "Al eliminar una versión de estadísticas también se borra su asset de "
+            "clasificación en GEE (clasificacion / clasificacion-ft)."
+        )
+
         assets_a_eliminar = st.multiselect(
             "Selecciona los assets para eliminar:",
             options=version_pool,
@@ -81,9 +112,15 @@ def render_admin_zone(modo, region_id=None, bioma_sel=None):
                 if st.button("🔥 EJECUTAR", disabled=not confirmar, use_container_width=True, key=f"btn_{unique_key}"):
                     res = eliminar_assets_seleccionados(assets_a_eliminar)
                     if res["exitos"]:
-                        st.success(f"Eliminados {len(res['exitos'])} assets.")
+                        st.success(
+                            f"Eliminados {len(res['exitos'])} assets en GEE "
+                            f"({len(assets_a_eliminar)} versión/es seleccionada/s)."
+                        )
                         time.sleep(1)
                         st.rerun()
+                    if res["bloqueados"]:
+                        for msg in res["bloqueados"]:
+                            st.warning(msg)
                     if res["errores"]:
                         for err in res["errores"]:
                             st.error(err)
