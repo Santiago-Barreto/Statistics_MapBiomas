@@ -37,9 +37,11 @@ def render_metrics(df):
     coberturas = [c for c in df.columns if c not in ["year", "version"]]
     c3.metric("Coberturas", len(coberturas))
 
-def plot_temporal_series(df, region_id):
+def plot_temporal_series(df, region_id, chart_key):
     """
     Genera gráficos interactivos con etiquetas reales en la leyenda.
+
+    chart_key debe ser único por instancia (p. ej. por pestaña o columna).
     """
     df = df.sort_values("year").reset_index(drop=True)
     cols_stats = [c for c in df.columns if c not in ["year", "version"]]
@@ -60,12 +62,11 @@ def plot_temporal_series(df, region_id):
             color_discrete_map={label_map[k]: v for k, v in color_map.items()}
         )
     else:
-        key_sel = f"sel_comb_{region_id}"
         opcion_id = st.selectbox(
             "Seleccionar Cobertura:", 
             options=cols_stats, 
             format_func=lambda x: label_map.get(x, x),
-            key=key_sel
+            key=f"{chart_key}_sel_cobertura"
         )
         
         fig = px.line(
@@ -74,7 +75,7 @@ def plot_temporal_series(df, region_id):
             template="plotly_white"
         )
     
-    st.plotly_chart(fig, width='stretch')
+    st.plotly_chart(fig, width='stretch', key=chart_key)
 
 def render_combined_view(data_dict, region_id):
     """
@@ -88,7 +89,7 @@ def render_combined_view(data_dict, region_id):
     if df_unificado is not None:
         df_unificado = df_unificado.sort_values(["version", "year"])
         render_metrics(df_unificado)
-        plot_temporal_series(df_unificado, region_id)
+        plot_temporal_series(df_unificado, region_id, chart_key=f"plot_comb_{region_id}")
         
         with st.expander("📋 Datos Consolidados"):
             st.dataframe(df_unificado, width='stretch')
@@ -99,7 +100,7 @@ def render_dashboard_view(data_dict, region_id):
     for tab, (v, df) in zip(tabs, data_dict.items()):
         with tab:
             render_metrics(df)
-            plot_temporal_series(df, region_id)
+            plot_temporal_series(df, region_id, chart_key=f"plot_dash_{region_id}_{v}")
             with st.expander("📋 Tabla de Datos"):
                 st.dataframe(df.sort_values("year", ascending=False),
                              width='stretch')
@@ -110,7 +111,7 @@ def render_graphs_only_view(data_dict, region_id):
     for i, (v, df) in enumerate(data_dict.items()):
         with cols_g[i % 2]:
             st.markdown(f"#### 📈 Versión {v}")
-            plot_temporal_series(df, region_id)
+            plot_temporal_series(df, region_id, chart_key=f"plot_grid_{region_id}_{v}")
             st.divider()
 
 def render_biome_view(data_dict, biome):
@@ -119,7 +120,7 @@ def render_biome_view(data_dict, biome):
     for i, (v, df) in enumerate(data_dict.items()):
         with cols_g[i % 2]:
             st.markdown(f"#### 📈 Versión {v}")
-            plot_temporal_series(df, biome)
+            plot_temporal_series(df, biome, chart_key=f"plot_biome_{biome}_{v}")
             st.divider()
 
 
@@ -200,7 +201,7 @@ def render_regional_contributions_biome(df_regional, biome):
         yaxis_title="Región",
         margin={"l": 20, "r": 20, "t": 10, "b": 10},
     )
-    st.plotly_chart(fig_heat, width="stretch")
+    st.plotly_chart(fig_heat, width="stretch", key=f"bioma_heat_{biome}_{clase_sel}")
 
     st.markdown("#### Línea temporal completa (ha, ganancia/pérdida anual)")
     tabla_tiempo = construir_tabla_linea_temporal(df_cov)
