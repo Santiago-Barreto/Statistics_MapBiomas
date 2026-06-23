@@ -10,6 +10,8 @@ from data.db import get_conn, ph
 from config import ASSET_PARENT
 from gee.assets import listar_versiones_disponibles, listar_assets_por_bioma
 from gee.deletion import (
+    clasificacion_desde_estadisticas,
+    describir_plan_eliminacion,
     es_asset_clasificacion,
     es_asset_eliminable,
     es_error_asset_inexistente,
@@ -66,14 +68,36 @@ def eliminar_assets_seleccionados(lista_ids):
         except Exception as e:
             if es_asset_clasificacion(a_id) and es_error_asset_inexistente(e):
                 resultados["omitidos"].append(
-                    f"Clasificación no encontrada (omitida): {a_id.split('/')[-1]}"
+                    f"{a_id}\n  → clasificación no encontrada en GEE (omitida)"
                 )
                 continue
-            resultados["errores"].append(f"Error en {a_id.split('/')[-1]}: {str(e)}")
+            resultados["errores"].append(f"{a_id}\n  → {str(e)}")
 
     conn.commit()
     conn.close()
     return resultados
+
+
+def _formatear_resultado_eliminacion(res: dict) -> str:
+    """Resume en texto las rutas afectadas tras ejecutar el borrado."""
+    bloques: list[str] = []
+
+    if res["exitos"]:
+        bloques.append("=== ELIMINADOS EN GEE ===")
+        for aid in res["exitos"]:
+            bloques.append(aid)
+    if res["omitidos"]:
+        bloques.append("\n=== OMITIDOS ===")
+        bloques.extend(res["omitidos"])
+    if res["bloqueados"]:
+        bloques.append("\n=== BLOQUEADOS ===")
+        bloques.extend(res["bloqueados"])
+    if res["errores"]:
+        bloques.append("\n=== ERRORES ===")
+        bloques.extend(res["errores"])
+
+    return "\n".join(bloques) if bloques else "Sin cambios."
+
 
 def render_admin_zone(modo, region_id=None, bioma_sel=None):
     """
@@ -100,8 +124,8 @@ def render_admin_zone(modo, region_id=None, bioma_sel=None):
         unique_key = f"admin_{modo}_{hash(tuple(version_pool))}"
         
         st.caption(
-            "Al eliminar una versión de estadísticas también se intenta borrar su asset de "
-            "clasificación en GEE. Si la clasificación no existe, se omite y se borra solo la estadística."
+            "Al confirmar se borran las rutas indicadas abajo. "
+            "La estadística se elimina en GEE y en la base local (SQLite/Neon)."
         )
 
         assets_a_eliminar = st.multiselect(
@@ -112,27 +136,39 @@ def render_admin_zone(modo, region_id=None, bioma_sel=None):
         )
         
         if assets_a_eliminar:
+            st.markdown("**Vista previa — rutas que se eliminarán**")
+            altura = min(160 + 72 * len(assets_a_eliminar), 420)
+            st.text_area(
+                "Plan de eliminación",
+                value=describir_plan_eliminacion(assets_a_eliminar),
+                height=altura,
+                disabled=True,
+                label_visibility="collapsed",
+                key=f"preview_{unique_key}",
+            )
+
             col1, col2 = st.columns([3, 1])
             with col1:
                 confirmar = st.checkbox("Confirmar eliminación permanente", key=f"check_{unique_key}")
             with col2:
                 if st.button("🔥 EJECUTAR", disabled=not confirmar, use_container_width=True, key=f"btn_{unique_key}"):
                     res = eliminar_assets_seleccionados(assets_a_eliminar)
+                    informe = _formatear_resultado_eliminacion(res)
                     if res["exitos"]:
                         st.success(
                             f"Eliminados {len(res['exitos'])} assets en GEE "
                             f"({len(assets_a_eliminar)} versión/es seleccionada/s)."
                         )
-                        time.sleep(1)
+                    st.text_area(
+                        "Resultado de la eliminación",
+                        value=informe,
+                        height=min(200 + 24 * (len(res["exitos"]) + len(res["errores"])), 480),
+                        disabled=True,
+                        label_visibility="collapsed",
+                        key=f"result_{unique_key}_{hash(informe)}",
+                    )
+                    if res["exitos"] and not res["errores"]:
+                        time.sleep(2)
                         st.rerun()
-                    if res["omitidos"]:
-                        for msg in res["omitidos"]:
-                            st.info(msg)
-                    if res["bloqueados"]:
-                        for msg in res["bloqueados"]:
-                            st.warning(msg)
-                    if res["errores"]:
-                        for err in res["errores"]:
-                            st.error(err)
         else:
             st.info("💡 No es necesario activar versiones para eliminarlas.")

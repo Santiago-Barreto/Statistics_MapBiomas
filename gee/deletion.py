@@ -149,3 +149,25 @@ def expandir_assets_para_eliminar(stats_ids: list[str]) -> list[str]:
                 visto.add(norm)
                 resultado.append(norm)
     return resultado
+
+
+def describir_plan_eliminacion(stats_ids: list[str]) -> str:
+    """Texto legible con las rutas GEE que se intentarán borrar por cada versión."""
+    lineas = [
+        f"Carpeta estadísticas (GEE + SQLite): {ASSET_PARENT.rstrip('/')}",
+        "",
+    ]
+    for stats_id in stats_ids:
+        etiqueta = stats_id.rsplit("/", 1)[-1]
+        clasif = clasificacion_desde_estadisticas(stats_id)
+        lineas.append(f"── {etiqueta} ──")
+        lineas.append(f"  Estadísticas:   {stats_id}")
+        if clasif:
+            lineas.append(f"  Clasificación:  {clasif}")
+        else:
+            lineas.append("  Clasificación:  (no detectada para este nombre)")
+        lineas.append("")
+    lineas.append(
+        "Nota: si la clasificación no existe en GEE, se omite y solo se borra la estadística."
+    )
+    return "\n".join(lineas)

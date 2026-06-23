@@ -11,6 +11,7 @@ if "streamlit" not in sys.modules:
 from config import ASSET_PARENT, BASE_PATH_V1, BASE_PATH_VX
 from gee.deletion import (
     clasificacion_desde_estadisticas,
+    describir_plan_eliminacion,
     es_asset_eliminable,
     es_error_asset_inexistente,
     es_ruta_protegida,
@@ -130,6 +131,14 @@ def test_eliminar_borra_stats_y_clasificacion(monkeypatch, tmp_path: Path):
     conn.close()
     assert n_assets == 0
     assert n_stats == 0
+
+
+def test_describir_plan_eliminacion_muestra_rutas_completas():
+    texto = describir_plan_eliminacion([STATS_V2])
+    assert STATS_V2 in texto
+    assert CLASIF_V2 in texto
+    assert "Estadísticas:" in texto
+    assert "Clasificación:" in texto
 
 
 def test_es_error_asset_inexistente():
