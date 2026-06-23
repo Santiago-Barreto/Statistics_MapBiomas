@@ -3,7 +3,7 @@ Eliminación segura de assets en Google Earth Engine.
 
 Solo permite borrar assets hoja concretos (estadísticas por región/versión o
 imagen de clasificación COLOMBIA-{región}-{versión}). Bloquea carpetas padre
-como clasificacion-ft, clasificacion o ESTADISTICAS.
+como clasificacion-ft, clasificacion o la carpeta raíz de estadísticas (ASSET_PARENT).
 """
 
 import re
@@ -45,7 +45,8 @@ def es_ruta_protegida(asset_id: str) -> bool:
             return True
     if aid.endswith("/clasificacion-ft") or aid.endswith("/clasificacion"):
         return True
-    if aid.endswith("/ESTADISTICAS"):
+    stats_folder = ASSET_PARENT.rstrip("/").rsplit("/", 1)[-1]
+    if aid.endswith(f"/{stats_folder}"):
         return True
     return False
 
@@ -100,7 +101,7 @@ def clasificacion_desde_estadisticas(stats_asset_id: str) -> str | None:
     """
     Deriva el asset de clasificación asociado a uno de estadísticas.
 
-    Ej.: .../ESTADISTICAS/R30435_V2 -> .../clasificacion-ft/COLOMBIA-30435-2
+    Ej.: .../STATISTICS/R30435_V2 -> .../clasificacion-ft/COLOMBIA-30435-2
     """
     label = stats_asset_id.rsplit("/", 1)[-1]
     region_match = re.search(r"R(\d+)", label, re.IGNORECASE)
