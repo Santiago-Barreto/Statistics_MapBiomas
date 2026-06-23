@@ -12,6 +12,7 @@ from config import ASSET_PARENT, BASE_PATH_V1, BASE_PATH_VX
 from gee.deletion import (
     clasificacion_desde_estadisticas,
     es_asset_eliminable,
+    es_error_asset_inexistente,
     es_ruta_protegida,
     expandir_assets_para_eliminar,
 )
@@ -122,6 +123,60 @@ def test_eliminar_borra_stats_y_clasificacion(monkeypatch, tmp_path: Path):
     assert STATS_V2 in res["exitos"]
     assert CLASIF_V2 in res["exitos"]
     assert not res["bloqueados"]
+
+    conn = sqlite3.connect(db_path)
+    n_assets = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
+    n_stats = conn.execute("SELECT COUNT(*) FROM stats").fetchone()[0]
+    conn.close()
+    assert n_assets == 0
+    assert n_stats == 0
+
+
+def test_es_error_asset_inexistente():
+    assert es_error_asset_inexistente(
+        Exception("Asset 'projects/x/COLOMBIA-1' does not exist or doesn't allow this operation.")
+    )
+    assert not es_error_asset_inexistente(Exception("Permission denied"))
+
+
+def test_eliminar_continua_si_clasificacion_no_existe(monkeypatch, tmp_path: Path):
+    db_path = str(tmp_path / "skip_clasif.db")
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute(
+        "CREATE TABLE assets (asset_id TEXT PRIMARY KEY, region_id TEXT, bioma TEXT, label TEXT, last_sync INTEGER)"
+    )
+    cur.execute(
+        "CREATE TABLE stats (asset_id TEXT, year INTEGER, class_id TEXT, area_ha REAL, PRIMARY KEY (asset_id, year, class_id))"
+    )
+    cur.execute(
+        "INSERT INTO assets VALUES (?, ?, ?, ?, ?)",
+        (STATS_V2, "30435", "Andes", "R30435_V2", 0),
+    )
+    cur.execute(
+        "INSERT INTO stats VALUES (?, ?, ?, ?)",
+        (STATS_V2, 2020, "1", 100.0),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("data.db.DB_PATH", db_path)
+
+    class _FakeEEData:
+        @staticmethod
+        def deleteAsset(asset_id):
+            if asset_id == CLASIF_V2:
+                raise Exception(
+                    f"Asset '{asset_id}' does not exist or doesn't allow this operation."
+                )
+
+    monkeypatch.setattr("ui.admin.ee", types.SimpleNamespace(data=_FakeEEData()))
+
+    res = eliminar_assets_seleccionados([STATS_V2])
+
+    assert STATS_V2 in res["exitos"]
+    assert CLASIF_V2 not in res["exitos"]
+    assert not res["errores"]
+    assert len(res["omitidos"]) == 1
 
     conn = sqlite3.connect(db_path)
     n_assets = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]

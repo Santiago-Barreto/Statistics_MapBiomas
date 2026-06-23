@@ -10,7 +10,9 @@ from data.db import get_conn, ph
 from config import ASSET_PARENT
 from gee.assets import listar_versiones_disponibles, listar_assets_por_bioma
 from gee.deletion import (
+    es_asset_clasificacion,
     es_asset_eliminable,
+    es_error_asset_inexistente,
     es_ruta_protegida,
     expandir_assets_para_eliminar,
 )
@@ -31,7 +33,7 @@ def eliminar_assets_seleccionados(lista_ids):
     Elimina assets de estadísticas en GEE y SQLite, y el asset de clasificación
     pareado (clasificacion / clasificacion-ft). Rutas padre están bloqueadas.
     """
-    resultados = {"exitos": [], "errores": [], "bloqueados": []}
+    resultados = {"exitos": [], "errores": [], "bloqueados": [], "omitidos": []}
     candidatos = expandir_assets_para_eliminar(lista_ids)
     stats_prefix = ASSET_PARENT.rstrip("/") + "/"
 
@@ -62,6 +64,11 @@ def eliminar_assets_seleccionados(lista_ids):
                 cur.execute(f"DELETE FROM stats WHERE asset_id = {ph()}", (a_id,))
             resultados["exitos"].append(a_id)
         except Exception as e:
+            if es_asset_clasificacion(a_id) and es_error_asset_inexistente(e):
+                resultados["omitidos"].append(
+                    f"Clasificación no encontrada (omitida): {a_id.split('/')[-1]}"
+                )
+                continue
             resultados["errores"].append(f"Error en {a_id.split('/')[-1]}: {str(e)}")
 
     conn.commit()
@@ -93,8 +100,8 @@ def render_admin_zone(modo, region_id=None, bioma_sel=None):
         unique_key = f"admin_{modo}_{hash(tuple(version_pool))}"
         
         st.caption(
-            "Al eliminar una versión de estadísticas también se borra su asset de "
-            "clasificación en GEE (clasificacion / clasificacion-ft)."
+            "Al eliminar una versión de estadísticas también se intenta borrar su asset de "
+            "clasificación en GEE. Si la clasificación no existe, se omite y se borra solo la estadística."
         )
 
         assets_a_eliminar = st.multiselect(
@@ -118,6 +125,9 @@ def render_admin_zone(modo, region_id=None, bioma_sel=None):
                         )
                         time.sleep(1)
                         st.rerun()
+                    if res["omitidos"]:
+                        for msg in res["omitidos"]:
+                            st.info(msg)
                     if res["bloqueados"]:
                         for msg in res["bloqueados"]:
                             st.warning(msg)

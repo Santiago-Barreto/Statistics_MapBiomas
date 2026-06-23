@@ -80,6 +80,27 @@ def _es_clasificacion_eliminable(asset_id: str) -> bool:
     return False
 
 
+def es_asset_estadisticas(asset_id: str) -> bool:
+    """True si el ID es un asset de estadísticas bajo ASSET_PARENT."""
+    return _es_stats_eliminable(_normalizar_id(asset_id))
+
+
+def es_asset_clasificacion(asset_id: str) -> bool:
+    """True si el ID es un asset hoja de clasificación COLOMBIA-{región}-{versión}."""
+    return _es_clasificacion_eliminable(_normalizar_id(asset_id))
+
+
+def es_error_asset_inexistente(exc: BaseException) -> bool:
+    """True si el error de GEE indica que el asset no existe."""
+    msg = str(exc).lower()
+    return (
+        "does not exist" in msg
+        or "doesn't exist" in msg
+        or "not found" in msg
+        or "no existe" in msg
+    )
+
+
 def es_asset_eliminable(asset_id: str) -> tuple[bool, str | None]:
     """
     Valida si un asset puede eliminarse.
