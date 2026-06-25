@@ -10,9 +10,8 @@ from data.db import get_conn, ph
 from config import ASSET_PARENT
 from gee.assets import listar_versiones_disponibles, listar_assets_por_bioma
 from gee.deletion import (
-    clasificacion_desde_estadisticas,
     describir_plan_eliminacion,
-    es_asset_clasificacion,
+    es_asset_opcional,
     es_asset_eliminable,
     es_error_asset_inexistente,
     es_ruta_protegida,
@@ -32,8 +31,9 @@ def obtener_assets_totales():
 
 def eliminar_assets_seleccionados(lista_ids):
     """
-    Elimina assets de estadísticas en GEE y SQLite, y el asset de clasificación
-    pareado (clasificacion / clasificacion-ft). Rutas padre están bloqueadas.
+    Elimina assets de estadísticas en GEE y SQLite, junto con los assets pareados
+    de clasificación (clasificacion / clasificacion-ft) y metadata. Rutas padre
+    están bloqueadas. Los pareados que no existan se omiten sin error.
     """
     resultados = {"exitos": [], "errores": [], "bloqueados": [], "omitidos": []}
     candidatos = expandir_assets_para_eliminar(lista_ids)
@@ -66,9 +66,9 @@ def eliminar_assets_seleccionados(lista_ids):
                 cur.execute(f"DELETE FROM stats WHERE asset_id = {ph()}", (a_id,))
             resultados["exitos"].append(a_id)
         except Exception as e:
-            if es_asset_clasificacion(a_id) and es_error_asset_inexistente(e):
+            if es_asset_opcional(a_id) and es_error_asset_inexistente(e):
                 resultados["omitidos"].append(
-                    f"{a_id}\n  → clasificación no encontrada en GEE (omitida)"
+                    f"{a_id}\n  → asset pareado no encontrado en GEE (omitido)"
                 )
                 continue
             resultados["errores"].append(f"{a_id}\n  → {str(e)}")

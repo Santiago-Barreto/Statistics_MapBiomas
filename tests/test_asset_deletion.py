@@ -8,22 +8,26 @@ from pathlib import Path
 if "streamlit" not in sys.modules:
     sys.modules["streamlit"] = types.SimpleNamespace()
 
-from config import ASSET_PARENT, BASE_PATH_V1, BASE_PATH_VX
+from config import ASSET_PARENT, BASE_PATH_METADATA, BASE_PATH_V1, BASE_PATH_VX
 from gee.deletion import (
     clasificacion_desde_estadisticas,
     describir_plan_eliminacion,
     es_asset_eliminable,
+    es_asset_metadata,
     es_error_asset_inexistente,
     es_ruta_protegida,
     expandir_assets_para_eliminar,
+    metadata_desde_estadisticas,
 )
 from ui.admin import eliminar_assets_seleccionados
 
 
 STATS_V2 = f"{ASSET_PARENT.rstrip('/')}/R30435_V2"
 CLASIF_V2 = f"{BASE_PATH_VX}/COLOMBIA-30435-2"
+META_V2 = f"{BASE_PATH_METADATA}/COLOMBIA-30435-2-metadata"
 STATS_V1 = f"{ASSET_PARENT.rstrip('/')}/R30435_V1"
 CLASIF_V1 = f"{BASE_PATH_V1}/COLOMBIA-30435-1"
+META_V1 = f"{BASE_PATH_METADATA}/COLOMBIA-30435-1-metadata"
 
 
 def test_clasificacion_desde_estadisticas_version_2():
@@ -38,7 +42,29 @@ def test_expandir_incluye_clasificacion_pareada():
     expandido = expandir_assets_para_eliminar([STATS_V2])
     assert STATS_V2 in expandido
     assert CLASIF_V2 in expandido
-    assert len(expandido) == 2
+    assert META_V2 in expandido
+    assert len(expandido) == 3
+
+
+def test_metadata_desde_estadisticas_version_2():
+    assert metadata_desde_estadisticas(STATS_V2) == META_V2
+
+
+def test_metadata_desde_estadisticas_version_1():
+    assert metadata_desde_estadisticas(STATS_V1) == META_V1
+
+
+def test_permite_asset_metadata_especifico():
+    assert es_asset_metadata(META_V2) is True
+    ok, reason = es_asset_eliminable(META_V2)
+    assert ok is True
+    assert reason is None
+
+
+def test_bloquea_carpeta_metadata():
+    assert es_ruta_protegida(BASE_PATH_METADATA) is True
+    ok, _ = es_asset_eliminable(BASE_PATH_METADATA)
+    assert ok is False
 
 
 def test_bloquea_carpeta_clasificacion_ft():
@@ -137,8 +163,47 @@ def test_describir_plan_eliminacion_muestra_rutas_completas():
     texto = describir_plan_eliminacion([STATS_V2])
     assert STATS_V2 in texto
     assert CLASIF_V2 in texto
+    assert META_V2 in texto
     assert "Estadísticas:" in texto
     assert "Clasificación:" in texto
+    assert "Metadata:" in texto
+
+
+def test_eliminar_continua_si_metadata_no_existe(monkeypatch, tmp_path: Path):
+    db_path = str(tmp_path / "skip_meta.db")
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute(
+        "CREATE TABLE assets (asset_id TEXT PRIMARY KEY, region_id TEXT, bioma TEXT, label TEXT, last_sync INTEGER)"
+    )
+    cur.execute(
+        "CREATE TABLE stats (asset_id TEXT, year INTEGER, class_id TEXT, area_ha REAL, PRIMARY KEY (asset_id, year, class_id))"
+    )
+    cur.execute(
+        "INSERT INTO assets VALUES (?, ?, ?, ?, ?)",
+        (STATS_V2, "30435", "Andes", "R30435_V2", 0),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("data.db.DB_PATH", db_path)
+
+    class _FakeEEData:
+        @staticmethod
+        def deleteAsset(asset_id):
+            if asset_id == META_V2:
+                raise Exception(
+                    f"Asset '{asset_id}' does not exist or doesn't allow this operation."
+                )
+
+    monkeypatch.setattr("ui.admin.ee", types.SimpleNamespace(data=_FakeEEData()))
+
+    res = eliminar_assets_seleccionados([STATS_V2])
+
+    assert STATS_V2 in res["exitos"]
+    assert CLASIF_V2 in res["exitos"]
+    assert META_V2 not in res["exitos"]
+    assert not res["errores"]
+    assert any("omitido" in m.lower() for m in res["omitidos"])
 
 
 def test_es_error_asset_inexistente():

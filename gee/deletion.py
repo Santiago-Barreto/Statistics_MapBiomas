@@ -8,12 +8,13 @@ como clasificacion-ft, clasificacion o la carpeta raíz de estadísticas (ASSET_
 
 import re
 
-from config import ASSET_PARENT, BASE_PATH_V1, BASE_PATH_VX
+from config import ASSET_PARENT, BASE_PATH_METADATA, BASE_PATH_V1, BASE_PATH_VX
 
 PROTECTED_EXACT_PATHS = frozenset(
     {
         BASE_PATH_V1.rstrip("/"),
         BASE_PATH_VX.rstrip("/"),
+        BASE_PATH_METADATA.rstrip("/"),
         ASSET_PARENT.rstrip("/"),
     }
 )
@@ -21,6 +22,7 @@ PROTECTED_EXACT_PATHS = frozenset(
 _RE_LEAF_STATS = re.compile(r"^R\d+_V\d+", re.IGNORECASE)
 _RE_LEAF_CLASIF_V1 = re.compile(r"^COLOMBIA-\d+-1$", re.IGNORECASE)
 _RE_LEAF_CLASIF_VX = re.compile(r"^COLOMBIA-\d+-\d+$", re.IGNORECASE)
+_RE_LEAF_METADATA = re.compile(r"^COLOMBIA-\d+-\d+-metadata$", re.IGNORECASE)
 
 
 def _normalizar_id(asset_id: str) -> str:
@@ -44,6 +46,8 @@ def es_ruta_protegida(asset_id: str) -> bool:
         if aid.endswith("/" + protected.rsplit("/", 1)[-1]) and "COLOMBIA-" not in aid:
             return True
     if aid.endswith("/clasificacion-ft") or aid.endswith("/clasificacion"):
+        return True
+    if aid.endswith("/metadata"):
         return True
     stats_folder = ASSET_PARENT.rstrip("/").rsplit("/", 1)[-1]
     if aid.endswith(f"/{stats_folder}"):
@@ -80,6 +84,16 @@ def _es_clasificacion_eliminable(asset_id: str) -> bool:
     return False
 
 
+def _es_metadata_eliminable(asset_id: str) -> bool:
+    prefix = _prefijo_carpeta(BASE_PATH_METADATA)
+    if not asset_id.startswith(prefix):
+        return False
+    leaf = asset_id[len(prefix) :]
+    if not leaf or "/" in leaf:
+        return False
+    return _RE_LEAF_METADATA.match(leaf) is not None
+
+
 def es_asset_estadisticas(asset_id: str) -> bool:
     """True si el ID es un asset de estadísticas bajo ASSET_PARENT."""
     return _es_stats_eliminable(_normalizar_id(asset_id))
@@ -88,6 +102,16 @@ def es_asset_estadisticas(asset_id: str) -> bool:
 def es_asset_clasificacion(asset_id: str) -> bool:
     """True si el ID es un asset hoja de clasificación COLOMBIA-{región}-{versión}."""
     return _es_clasificacion_eliminable(_normalizar_id(asset_id))
+
+
+def es_asset_metadata(asset_id: str) -> bool:
+    """True si el ID es un asset hoja de metadata COLOMBIA-{región}-{versión}-metadata."""
+    return _es_metadata_eliminable(_normalizar_id(asset_id))
+
+
+def es_asset_opcional(asset_id: str) -> bool:
+    """Assets pareados (clasificación o metadata) que pueden no existir."""
+    return es_asset_clasificacion(asset_id) or es_asset_metadata(asset_id)
 
 
 def es_error_asset_inexistente(exc: BaseException) -> bool:
@@ -115,6 +139,8 @@ def es_asset_eliminable(asset_id: str) -> tuple[bool, str | None]:
         return True, None
     if _es_clasificacion_eliminable(aid):
         return True, None
+    if _es_metadata_eliminable(aid):
+        return True, None
     return False, f"Asset fuera de patrón permitido: {aid}"
 
 
@@ -135,12 +161,32 @@ def clasificacion_desde_estadisticas(stats_asset_id: str) -> str | None:
     return f"{base.rstrip('/')}/COLOMBIA-{region_id}-{version_num}"
 
 
+def metadata_desde_estadisticas(stats_asset_id: str) -> str | None:
+    """
+    Deriva el asset de metadata asociado a uno de estadísticas.
+
+    Ej.: .../STATISTICS/R30455_V2 -> .../metadata/COLOMBIA-30455-2-metadata
+    """
+    label = stats_asset_id.rsplit("/", 1)[-1]
+    region_match = re.search(r"R(\d+)", label, re.IGNORECASE)
+    version_match = re.search(r"_V(\d+)", label, re.IGNORECASE)
+    if not region_match or not version_match:
+        return None
+    region_id = region_match.group(1)
+    version_num = version_match.group(1)
+    return f"{BASE_PATH_METADATA.rstrip('/')}/COLOMBIA-{region_id}-{version_num}-metadata"
+
+
 def expandir_assets_para_eliminar(stats_ids: list[str]) -> list[str]:
-    """Incluye el asset de clasificación pareado por cada versión de estadísticas."""
+    """Incluye los assets de clasificación y metadata pareados por cada versión."""
     resultado: list[str] = []
     visto: set[str] = set()
     for stats_id in stats_ids:
-        candidatos = [stats_id, clasificacion_desde_estadisticas(stats_id)]
+        candidatos = [
+            stats_id,
+            clasificacion_desde_estadisticas(stats_id),
+            metadata_desde_estadisticas(stats_id),
+        ]
         for aid in candidatos:
             if not aid:
                 continue
@@ -160,14 +206,20 @@ def describir_plan_eliminacion(stats_ids: list[str]) -> str:
     for stats_id in stats_ids:
         etiqueta = stats_id.rsplit("/", 1)[-1]
         clasif = clasificacion_desde_estadisticas(stats_id)
+        meta = metadata_desde_estadisticas(stats_id)
         lineas.append(f"── {etiqueta} ──")
         lineas.append(f"  Estadísticas:   {stats_id}")
         if clasif:
             lineas.append(f"  Clasificación:  {clasif}")
         else:
             lineas.append("  Clasificación:  (no detectada para este nombre)")
+        if meta:
+            lineas.append(f"  Metadata:       {meta}")
+        else:
+            lineas.append("  Metadata:       (no detectada para este nombre)")
         lineas.append("")
     lineas.append(
-        "Nota: si la clasificación no existe en GEE, se omite y solo se borra la estadística."
+        "Nota: si la clasificación o la metadata no existen en GEE, se omiten y "
+        "se borra solo lo que sí exista (siempre la estadística)."
     )
     return "\n".join(lineas)

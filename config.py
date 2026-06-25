@@ -10,6 +10,7 @@ ASSET_REGIONES = "projects/mapbiomas-colombia/assets/DATOS_AUXILIARES/VECTORES/c
 
 BASE_PATH_V1 = "projects/mapbiomas-colombia/assets/LULC/COLECCION4/clasificacion"
 BASE_PATH_VX = "projects/mapbiomas-colombia/assets/LULC/COLECCION4/clasificacion-ft"
+BASE_PATH_METADATA = "projects/mapbiomas-colombia/assets/LULC/COLECCION4/metadata"
 
 LEYENDA_MAPBIOMAS = {
     1: {"label": "Formación boscosa", "color": "#1F8D49", "level": 1},
