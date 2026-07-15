@@ -148,7 +148,7 @@ def clasificacion_desde_estadisticas(stats_asset_id: str) -> str | None:
     """
     Deriva el asset de clasificación asociado a uno de estadísticas.
 
-    Ej.: .../STATISTICS/R30435_V2 -> .../clasificacion-ft/COLOMBIA-30435-2
+    Ej.: .../ESTADISTICAS/R30435_V2 -> .../clasificacion-ft/COLOMBIA-30435-2
     """
     label = stats_asset_id.rsplit("/", 1)[-1]
     region_match = re.search(r"R(\d+)", label, re.IGNORECASE)
@@ -165,7 +165,7 @@ def metadata_desde_estadisticas(stats_asset_id: str) -> str | None:
     """
     Deriva el asset de metadata asociado a uno de estadísticas.
 
-    Ej.: .../STATISTICS/R30455_V2 -> .../metadata/COLOMBIA-30455-2-metadata
+    Ej.: .../ESTADISTICAS/R30455_V2 -> .../metadata/COLOMBIA-30455-2-metadata
     """
     label = stats_asset_id.rsplit("/", 1)[-1]
     region_match = re.search(r"R(\d+)", label, re.IGNORECASE)
