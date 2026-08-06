@@ -106,10 +106,11 @@ def test_rellenar_stats_faltantes_desde_gee_inserta_filas(monkeypatch, tmp_path:
     _crear_schema_basico(db_path)
     monkeypatch.setattr("data.db.DB_PATH", db_path)
 
+    aid = f"{ASSET_PARENT_GENERAL.rstrip('/')}/R30477_V11"
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO assets VALUES (?, ?, ?, ?, ?)",
-        ("projects/test/R30477_V11", "30477", "Andes", "R30477_V11", 0),
+        (aid, "30477", "Andes", "R30477_V11", 0),
     )
     conn.commit()
     conn.close()
@@ -125,7 +126,7 @@ def test_rellenar_stats_faltantes_desde_gee_inserta_filas(monkeypatch, tmp_path:
     conn = sqlite3.connect(db_path)
     n = conn.execute(
         "SELECT COUNT(*) FROM stats WHERE asset_id = ?",
-        ("projects/test/R30477_V11",),
+        (aid,),
     ).fetchone()[0]
     conn.close()
     assert n == 1
