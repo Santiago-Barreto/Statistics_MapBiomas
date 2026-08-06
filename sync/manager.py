@@ -17,7 +17,41 @@ from data.db import (
 )
 from data.year_norm import normalize_year
 from gee.assets import leer_stats_procesadas
+from config import ASSET_REGIONES
 from data.stats_source import get_active_asset_parent
+
+# Caché en memoria del mapa región→bioma (ASSET_REGIONES). Una sola lectura GEE por proceso.
+_bioma_dict_cache: dict[str, str] | None = None
+
+
+def _cargar_bioma_dict_desde_gee() -> dict[str, str]:
+    """Lee id_regionC / bioma desde ASSET_REGIONES."""
+    global _bioma_dict_cache
+    if _bioma_dict_cache is not None:
+        return _bioma_dict_cache
+    try:
+        bioma_mapping_raw = ee.FeatureCollection(ASSET_REGIONES).reduceColumns(
+            ee.Reducer.toList().repeat(2), ["id_regionC", "bioma"]
+        ).getInfo()
+        listas = bioma_mapping_raw.get("list", [[], []])
+        _bioma_dict_cache = dict(zip([str(x) for x in listas[0]], listas[1]))
+    except Exception:
+        _bioma_dict_cache = {}
+    return _bioma_dict_cache
+
+
+def _bioma_dict_con_fallback(cur) -> dict[str, str]:
+    """ASSET_REGIONES primero; completa huecos con filas ya guardadas en BD."""
+    bioma_dict = dict(_cargar_bioma_dict_desde_gee())
+    cur.execute(
+        """
+        SELECT DISTINCT region_id, bioma FROM assets
+        WHERE bioma IS NOT NULL AND bioma <> '' AND bioma <> 'Sin Bioma'
+        """
+    )
+    for region_id, bioma in cur.fetchall():
+        bioma_dict.setdefault(str(region_id), bioma)
+    return bioma_dict
 
 
 def hay_assets_sin_stats():
@@ -189,14 +223,7 @@ def sincronizar_todo_interno():
 
     remote_ids_cob = {a.get('id') for a in remote_assets_cob if a.get('id')}
 
-    # Biomas desde caché local (evita reduceColumns.getInfo() que puede colgarse).
-    cur.execute(
-        """
-        SELECT DISTINCT region_id, bioma FROM assets
-        WHERE bioma IS NOT NULL AND bioma <> '' AND bioma <> 'Sin Bioma'
-        """
-    )
-    bioma_dict = {str(r[0]): r[1] for r in cur.fetchall()}
+    bioma_dict = _bioma_dict_con_fallback(cur)
 
     cur.execute("SELECT asset_id FROM assets")
     local_ids_cob = {r[0] for r in cur.fetchall()}
