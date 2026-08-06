@@ -10,7 +10,6 @@ from config import MODOS_APP
 from data.db import inicializar_db, is_postgres
 from gee.init import inicializar_gee
 from sync.manager import (
-    chequeo_automatico_sincro,
     hay_assets_sin_stats,
     rellenar_stats_faltantes_desde_gee,
     sincronizar_todo_interno,
@@ -116,17 +115,15 @@ def procesar_sincronizacion():
     Si se cambió la fuente de estadísticas, fuerza una sync completa de esa carpeta.
     """
     forzar = st.session_state.pop("forzar_sincro", False)
-    if forzar:
+    if forzar or "ultima_sincro" not in st.session_state:
         with st.spinner("Sincronizando carpeta de estadísticas activa…"):
-            sincronizar_todo_interno()
+            ok_info = sincronizar_todo_interno()
             if hay_assets_sin_stats():
                 rellenar_stats_faltantes_desde_gee()
         st.session_state.ultima_sincro = True
-        return
+        return ok_info
+    return None
 
-    if "ultima_sincro" not in st.session_state:
-        chequeo_automatico_sincro()
-        st.session_state.ultima_sincro = True
 
 @st.dialog("⚙️ ASSETS Y GEE", width="large")
 def mostrar_admin_dialog(modo, region_id, bioma_sel=None):
@@ -137,15 +134,23 @@ def mostrar_admin_dialog(modo, region_id, bioma_sel=None):
     st.divider()
     render_admin_zone(modo, region_id, bioma_sel=bioma_sel)
 
+
 def main():
     """
     Punto de entrada principal que coordina el flujo de datos y la interfaz.
     """
+    from config import FUENTE_DEFAULT
+    from data.stats_source import get_active_asset_parent
+
     configurar_app()
+    # Fijar fuente ANTES del sync (default = STATISTICS_GENERAL en esta rama).
+    if "fuente_stats" not in st.session_state:
+        st.session_state.fuente_stats = FUENTE_DEFAULT
+
     iniciar_servicios_una_vez()
 
-    # Sync (incluye re-sync forzado al cambiar fuente de estadísticas).
     if st.session_state.get("forzar_sincro") or "ultima_sincro" not in st.session_state:
+        st.caption(f"Sincronizando: `{get_active_asset_parent().rstrip('/')}`")
         if is_postgres() and "ultima_sincro" not in st.session_state and not st.session_state.get("forzar_sincro"):
             st.info(
                 "**Primera sincronización con la base en la nube (Neon):** se descargan "
@@ -157,7 +162,19 @@ def main():
                 procesar_sincronizacion()
             st.rerun()
         else:
-            procesar_sincronizacion()
+            res = procesar_sincronizacion()
+            if res is not None:
+                total, nombres, ok = res
+                if not ok:
+                    st.error(
+                        "No se pudo sincronizar la carpeta GEE activa. "
+                        f"Revisa permisos sobre `{get_active_asset_parent().rstrip('/')}`."
+                    )
+                elif total == 0:
+                    st.info(
+                        "Sync OK. No hay assets nuevos; si el panel está vacío, "
+                        "confirma que existen FeatureCollections en la carpeta activa."
+                    )
 
     if "thumbnails" not in st.session_state:
         st.session_state.thumbnails = None

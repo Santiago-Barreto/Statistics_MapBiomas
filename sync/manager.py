@@ -11,25 +11,30 @@ from data.db import (
     get_conn,
     insert_assets_upsert_sql,
     insert_stats_upsert_sql,
+    ph,
     ph_join,
     upsert_control_sincro_sql,
 )
 from data.year_norm import normalize_year
 from gee.assets import leer_stats_procesadas
-from config import ASSET_REGIONES
 from data.stats_source import get_active_asset_parent
 
 
 def hay_assets_sin_stats():
-    """True si existen assets en la BD sin ninguna fila en stats."""
+    """True si existen assets de la fuente activa sin ninguna fila en stats."""
+    from data.stats_source import get_active_asset_parent
+
     conn = get_conn()
     cur = conn.cursor()
+    prefijo = get_active_asset_parent().rstrip("/") + "/"
     cur.execute(
-        """
+        f"""
         SELECT 1 FROM assets a
-        WHERE NOT EXISTS (SELECT 1 FROM stats s WHERE s.asset_id = a.asset_id)
+        WHERE a.asset_id LIKE {ph()}
+        AND NOT EXISTS (SELECT 1 FROM stats s WHERE s.asset_id = a.asset_id)
         LIMIT 1
-        """
+        """,
+        (f"{prefijo}%",),
     )
     existe = cur.fetchone() is not None
     conn.close()
@@ -180,15 +185,14 @@ def sincronizar_todo_interno():
 
     remote_ids_cob = {a.get('id') for a in remote_assets_cob if a.get('id')}
 
-    try:
-        bioma_mapping_raw = ee.FeatureCollection(ASSET_REGIONES).reduceColumns(
-            ee.Reducer.toList().repeat(2), ['id_regionC', 'bioma']
-        ).getInfo()
-    except Exception:
-        bioma_mapping_raw = {'list': [[], []]}
-
-    listas = bioma_mapping_raw.get('list', [[], []])
-    bioma_dict = dict(zip([str(x) for x in listas[0]], listas[1]))
+    # Biomas desde caché local (evita reduceColumns.getInfo() que puede colgarse).
+    cur.execute(
+        """
+        SELECT DISTINCT region_id, bioma FROM assets
+        WHERE bioma IS NOT NULL AND bioma <> '' AND bioma <> 'Sin Bioma'
+        """
+    )
+    bioma_dict = {str(r[0]): r[1] for r in cur.fetchall()}
 
     cur.execute("SELECT asset_id FROM assets")
     local_ids_cob = {r[0] for r in cur.fetchall()}

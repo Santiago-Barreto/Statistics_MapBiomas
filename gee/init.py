@@ -36,7 +36,11 @@ def inicializar_gee():
             )
             ee.Initialize(credentials)
         else:
-            ee.Initialize()
+            # mapbiomas-colombia evita cuota restricted de proyectos personales.
+            try:
+                ee.Initialize(project="mapbiomas-colombia")
+            except Exception:
+                ee.Initialize()
             
     except Exception as e:
         st.error(f"❌ Error de inicialización: {e}")

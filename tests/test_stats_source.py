@@ -22,3 +22,10 @@ def test_parent_general_es_statistics_general():
 
 def test_parent_desconocido_cae_a_coleccion():
     assert parent_para_fuente("otra").rstrip("/") == ASSET_PARENT.rstrip("/")
+
+
+def test_fuente_default_es_general():
+    from config import FUENTE_DEFAULT, FUENTE_GENERAL
+
+    assert FUENTE_DEFAULT == FUENTE_GENERAL
+    assert parent_para_fuente(FUENTE_DEFAULT).rstrip("/") == ASSET_PARENT_GENERAL.rstrip("/")

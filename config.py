@@ -11,10 +11,11 @@ ASSET_REGIONES = "projects/mapbiomas-colombia/assets/DATOS_AUXILIARES/VECTORES/c
 # Fuentes de estadísticas: la colección MapBiomas es el default estable.
 FUENTE_COLECCION = "coleccion"
 FUENTE_GENERAL = "general"
-FUENTE_DEFAULT = FUENTE_COLECCION
+# En esta rama el análisis apunta a STATISTICS_GENERAL por defecto.
+FUENTE_DEFAULT = FUENTE_GENERAL
 FUENTES_ESTADISTICAS = {
-    "Colección MapBiomas": FUENTE_COLECCION,
     "STATISTICS_GENERAL": FUENTE_GENERAL,
+    "Colección MapBiomas": FUENTE_COLECCION,
 }
 
 

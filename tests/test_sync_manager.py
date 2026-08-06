@@ -8,7 +8,7 @@ from pathlib import Path
 if "streamlit" not in sys.modules:
     sys.modules["streamlit"] = types.SimpleNamespace()
 
-from config import ASSET_PARENT
+from config import ASSET_PARENT_GENERAL
 from sync import manager
 
 
@@ -59,7 +59,7 @@ def test_sincronizar_todo_interno_omite_assets_invalidos(monkeypatch, tmp_path: 
     class _FakeEEData:
         @staticmethod
         def listAssets(payload):
-            if payload["parent"] == ASSET_PARENT:
+            if payload["parent"] == ASSET_PARENT_GENERAL:
                 return {"assets": [{"id": "projects/x/R1_V1"}, {"name": "sin_id"}]}
             return {"assets": []}
 
