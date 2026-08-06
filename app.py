@@ -19,6 +19,7 @@ from ui.sidebar import render_sidebar
 from ui.map import render_visual_inspector
 from ui.status import render_status_popover 
 from ui.admin import render_admin_zone     
+from ui.excel_export import render_excel_export_panel
 from ui.charts import (
     render_dashboard_view,
     render_graphs_only_view,
@@ -198,6 +199,8 @@ def main():
 
         if scope == "region":
             render_visual_inspector(region_id, version_sel, data_dict)
+            st.divider()
+            render_excel_export_panel(region_id, data_dict)
             st.divider()
 
         vistas = {
