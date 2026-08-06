@@ -135,7 +135,10 @@ def render_sidebar():
 
 def _render_exportar_version_final(region_id, version_sel):
     """Botón bajo Visualización: Excel con gráficas desde las versiones seleccionadas."""
-    st.caption("Una hoja por versión seleccionada + gráficas MapBiomas.")
+    st.caption(
+        "Una hoja por versión + gráficas MapBiomas → descarga "
+        f"`region_{region_id}_complete.xlsx`."
+    )
     disabled = not version_sel
     if st.button(
         "📥 Exportar versión final",
