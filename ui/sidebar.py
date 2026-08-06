@@ -15,7 +15,13 @@ from ui.formatters import (
     categorizar_versiones,
     seleccionar_assets_base_ultima_version_efectiva,
 )
-from config import MODOS_APP
+from config import FUENTES_ESTADISTICAS, MODOS_APP
+from data.stats_source import (
+    get_active_asset_parent,
+    get_fuente_activa,
+    label_para_fuente,
+    set_fuente_activa,
+)
 
 
 def render_sidebar():
@@ -30,7 +36,28 @@ def render_sidebar():
     bioma_sel = None
 
     with st.sidebar:
-    
+        labels = list(FUENTES_ESTADISTICAS.keys())
+        label_actual = label_para_fuente(get_fuente_activa())
+        idx_default = labels.index(label_actual) if label_actual in labels else 0
+        fuente_label = st.radio(
+            "Fuente de estadísticas",
+            options=labels,
+            index=idx_default,
+            help=(
+                "Colección MapBiomas = producción estable. "
+                "STATISTICS_GENERAL = carpeta de análisis en ee-my-andesnorte."
+            ),
+        )
+        fuente = FUENTES_ESTADISTICAS[fuente_label]
+        if set_fuente_activa(fuente):
+            st.session_state.pop("ultima_sincro", None)
+            st.session_state.forzar_sincro = True
+            st.info(f"Fuente cambiada a **{fuente_label}**. Re-sincronizando…")
+            st.rerun()
+
+        st.caption(f"GEE: `{get_active_asset_parent().rstrip('/')}`")
+        st.divider()
+
         _modo_keys = list(MODOS_APP.keys())
         if len(_modo_keys) == 1:
             modo_label = _modo_keys[0]
@@ -51,6 +78,12 @@ def render_sidebar():
         if modo == list(MODOS_APP.values())[0]:
             st.divider()
             biomas = obtener_biomas()
+            if not biomas:
+                st.warning(
+                    "No hay biomas en la BD para esta fuente. "
+                    "Espera la sincronización o verifica que haya assets en la carpeta GEE."
+                )
+                st.stop()
             bioma_sel = st.selectbox("🌎 Bioma", biomas)
 
             alcance = st.radio(
@@ -76,7 +109,7 @@ def render_sidebar():
                 version_sel = seleccionar_assets_base_ultima_version_efectiva(versiones_raw)
                 if not version_sel:
                     st.warning(
-                        "No se encontraron mapas base de estadísticas (R{id}_V{versión} sin proceso) para este bioma."
+                        "No se encontraron mapas base de estadísticas (R{id}_V{versión} sin filtro) para este bioma."
                     )
                     st.stop()
                 st.subheader("Mapas incluidos (bioma)")
@@ -99,24 +132,27 @@ def render_sidebar():
                         for item in assets:
                             if st.checkbox(formatear_nombre_humano(item), key=item):
                                 version_sel.append(item)
-            
+
             st.divider()
-            modo_vista = st.radio("Visualización", ["Dashboard Completo", "Solo Gráficas", "Comparativa Combinada"])
-            
+            modo_vista = st.radio(
+                "Visualización",
+                ["Dashboard Completo", "Solo Gráficas", "Comparativa Combinada"],
+            )
+
             st.divider()
 
             st.subheader("Comparación en GEE")
-            st.info("Compara los resultados de la Colección 4 frente a la Colección 3 en el visor oficial (También puedes ver los limites entre regiones y biomas ;D)")
-            
+            st.info(
+                "Compara los resultados de la Colección 4 frente a la Colección 3 en el visor oficial "
+                "(También puedes ver los limites entre regiones y biomas ;D)"
+            )
+
             st.link_button(
                 "🔍 Visor Comparativo C3 vs C4",
                 "https://mapbiomas-andesnorte.users.earthengine.app/view/coleccion4",
-                width='content',
-                help="Accede a la App de GEE para validación cruzada entre colecciones."
+                width="content",
+                help="Accede a la App de GEE para validación cruzada entre colecciones.",
             )
         st.divider()
-
-
-        
 
     return region_id, version_sel, modo_vista, modo, scope, bioma_sel

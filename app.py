@@ -9,7 +9,12 @@ import streamlit as st
 from config import MODOS_APP
 from data.db import inicializar_db, is_postgres
 from gee.init import inicializar_gee
-from sync.manager import chequeo_automatico_sincro, rellenar_stats_faltantes_desde_gee
+from sync.manager import (
+    chequeo_automatico_sincro,
+    hay_assets_sin_stats,
+    rellenar_stats_faltantes_desde_gee,
+    sincronizar_todo_interno,
+)
 from data.processing import cargar_datos_totales, cargar_datos_bioma, cargar_aportes_regionales_bioma
 from ui.sidebar import render_sidebar
 from ui.map import render_visual_inspector
@@ -108,7 +113,17 @@ def iniciar_servicios_una_vez():
 def procesar_sincronizacion():
     """
     Gestiona el flujo de sincronización automática una vez por sesión de usuario.
+    Si se cambió la fuente de estadísticas, fuerza una sync completa de esa carpeta.
     """
+    forzar = st.session_state.pop("forzar_sincro", False)
+    if forzar:
+        with st.spinner("Sincronizando carpeta de estadísticas activa…"):
+            sincronizar_todo_interno()
+            if hay_assets_sin_stats():
+                rellenar_stats_faltantes_desde_gee()
+        st.session_state.ultima_sincro = True
+        return
+
     if "ultima_sincro" not in st.session_state:
         chequeo_automatico_sincro()
         st.session_state.ultima_sincro = True
@@ -129,8 +144,9 @@ def main():
     configurar_app()
     iniciar_servicios_una_vez()
 
-    if "ultima_sincro" not in st.session_state:
-        if is_postgres():
+    # Sync (incluye re-sync forzado al cambiar fuente de estadísticas).
+    if st.session_state.get("forzar_sincro") or "ultima_sincro" not in st.session_state:
+        if is_postgres() and "ultima_sincro" not in st.session_state and not st.session_state.get("forzar_sincro"):
             st.info(
                 "**Primera sincronización con la base en la nube (Neon):** se descargan "
                 "assets y estadísticas desde Earth Engine. Suele tardar **varios minutos** "
@@ -166,11 +182,14 @@ def main():
             )
 
     with col_title:
+        from data.stats_source import label_para_fuente, get_fuente_activa
+
         alcance_txt = f"Bioma {bioma_sel}" if scope == "bioma" else f"Región {region_id}"
+        fuente_txt = label_para_fuente(get_fuente_activa())
         st.markdown(f"""
             <div class='main-header dashboard-card'>
                 <h1 style='margin-bottom:0;'>Estadísticas MapBiomas Colombia - Coberturas</h1>
-                <p style='color:gray; margin-top:0;'>Colección 4 · {alcance_txt} · Panel Analítico</p>
+                <p style='color:gray; margin-top:0;'>Colección 4 · {alcance_txt} · {fuente_txt}</p>
             </div>
         """, unsafe_allow_html=True)
 

@@ -8,7 +8,13 @@ como clasificacion-ft, clasificacion o la carpeta raíz de estadísticas (ASSET_
 
 import re
 
-from config import ASSET_PARENT, BASE_PATH_METADATA, BASE_PATH_V1, BASE_PATH_VX
+from config import (
+    ASSET_PARENT,
+    ASSET_PARENT_GENERAL,
+    BASE_PATH_METADATA,
+    BASE_PATH_V1,
+    BASE_PATH_VX,
+)
 
 PROTECTED_EXACT_PATHS = frozenset(
     {
@@ -16,6 +22,7 @@ PROTECTED_EXACT_PATHS = frozenset(
         BASE_PATH_VX.rstrip("/"),
         BASE_PATH_METADATA.rstrip("/"),
         ASSET_PARENT.rstrip("/"),
+        ASSET_PARENT_GENERAL.rstrip("/"),
     }
 )
 
@@ -49,20 +56,27 @@ def es_ruta_protegida(asset_id: str) -> bool:
         return True
     if aid.endswith("/metadata"):
         return True
-    stats_folder = ASSET_PARENT.rstrip("/").rsplit("/", 1)[-1]
-    if aid.endswith(f"/{stats_folder}"):
-        return True
+    for base in (ASSET_PARENT, ASSET_PARENT_GENERAL):
+        stats_folder = base.rstrip("/").rsplit("/", 1)[-1]
+        if aid.endswith(f"/{stats_folder}"):
+            return True
     return False
 
 
+def _stats_parents() -> tuple[str, ...]:
+    return (ASSET_PARENT, ASSET_PARENT_GENERAL)
+
+
 def _es_stats_eliminable(asset_id: str) -> bool:
-    prefix = _prefijo_carpeta(ASSET_PARENT)
-    if not asset_id.startswith(prefix):
-        return False
-    leaf = asset_id[len(prefix) :]
-    if not leaf or "/" in leaf:
-        return False
-    return _RE_LEAF_STATS.match(leaf) is not None
+    for base in _stats_parents():
+        prefix = _prefijo_carpeta(base)
+        if not asset_id.startswith(prefix):
+            continue
+        leaf = asset_id[len(prefix) :]
+        if not leaf or "/" in leaf:
+            return False
+        return _RE_LEAF_STATS.match(leaf) is not None
+    return False
 
 
 def _es_clasificacion_eliminable(asset_id: str) -> bool:
@@ -95,7 +109,7 @@ def _es_metadata_eliminable(asset_id: str) -> bool:
 
 
 def es_asset_estadisticas(asset_id: str) -> bool:
-    """True si el ID es un asset de estadísticas bajo ASSET_PARENT."""
+    """True si el ID es un asset de estadísticas bajo alguna carpeta conocida."""
     return _es_stats_eliminable(_normalizar_id(asset_id))
 
 
@@ -199,8 +213,10 @@ def expandir_assets_para_eliminar(stats_ids: list[str]) -> list[str]:
 
 def describir_plan_eliminacion(stats_ids: list[str]) -> str:
     """Texto legible con las rutas GEE que se intentarán borrar por cada versión."""
+    from data.stats_source import get_active_asset_parent
+
     lineas = [
-        f"Carpeta estadísticas (GEE + SQLite): {ASSET_PARENT.rstrip('/')}",
+        f"Carpeta estadísticas (GEE + SQLite): {get_active_asset_parent().rstrip('/')}",
         "",
     ]
     for stats_id in stats_ids:

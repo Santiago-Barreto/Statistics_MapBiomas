@@ -7,10 +7,11 @@ import streamlit as st
 import ee
 import time
 from data.db import get_conn, ph
-from config import ASSET_PARENT
+from data.stats_source import get_active_asset_parent
 from gee.assets import listar_versiones_disponibles, listar_assets_por_bioma
 from gee.deletion import (
     describir_plan_eliminacion,
+    es_asset_estadisticas,
     es_asset_opcional,
     es_asset_eliminable,
     es_error_asset_inexistente,
@@ -23,7 +24,7 @@ def obtener_assets_totales():
     Obtiene la lista completa de IDs de assets desde las carpetas de GEE.
     """
     try:
-        assets = ee.data.listAssets({'parent': ASSET_PARENT}).get('assets', [])
+        assets = ee.data.listAssets({'parent': get_active_asset_parent()}).get('assets', [])
         return [a['id'] for a in assets]
     except Exception as e:
         st.error(f"Error al consultar GEE: {str(e)}")
@@ -37,7 +38,6 @@ def eliminar_assets_seleccionados(lista_ids):
     """
     resultados = {"exitos": [], "errores": [], "bloqueados": [], "omitidos": []}
     candidatos = expandir_assets_para_eliminar(lista_ids)
-    stats_prefix = ASSET_PARENT.rstrip("/") + "/"
 
     para_eliminar = []
     for a_id in candidatos:
@@ -61,7 +61,7 @@ def eliminar_assets_seleccionados(lista_ids):
     for a_id in para_eliminar:
         try:
             ee.data.deleteAsset(a_id)
-            if a_id.startswith(stats_prefix):
+            if es_asset_estadisticas(a_id):
                 cur.execute(f"DELETE FROM assets WHERE asset_id = {ph()}", (a_id,))
                 cur.execute(f"DELETE FROM stats WHERE asset_id = {ph()}", (a_id,))
             resultados["exitos"].append(a_id)

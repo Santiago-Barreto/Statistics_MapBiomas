@@ -16,7 +16,8 @@ from data.db import (
 )
 from data.year_norm import normalize_year
 from gee.assets import leer_stats_procesadas
-from config import ASSET_PARENT, ASSET_REGIONES
+from config import ASSET_REGIONES
+from data.stats_source import get_active_asset_parent
 
 
 def hay_assets_sin_stats():
@@ -169,7 +170,9 @@ def sincronizar_todo_interno():
     try:
         conn = get_conn()
         cur = conn.cursor()
-        remote_assets_cob = ee.data.listAssets({'parent': ASSET_PARENT}).get('assets', [])
+        remote_assets_cob = ee.data.listAssets(
+            {"parent": get_active_asset_parent()}
+        ).get("assets", [])
     except Exception:
         if conn is not None:
             conn.close()
