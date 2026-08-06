@@ -7,7 +7,7 @@ y renderizado de los componentes principales de la aplicación.
 
 import streamlit as st
 from config import MODOS_APP
-from data.db import inicializar_db, is_postgres
+from data.db import inicializar_db
 from gee.init import inicializar_gee
 from sync.manager import (
     hay_assets_sin_stats,
