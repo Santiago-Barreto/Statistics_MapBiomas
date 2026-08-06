@@ -15,6 +15,14 @@ from typing import Mapping
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.chart import LineChart, Reference
+from openpyxl.chart.marker import Marker
+from openpyxl.chart.shapes import GraphicalProperties
+from openpyxl.chart.text import RichText
+from openpyxl.drawing.text import (
+    CharacterProperties,
+    Paragraph,
+    ParagraphProperties,
+)
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.dataframe import dataframe_to_rows
@@ -140,9 +148,47 @@ def _df_limpio(df: pd.DataFrame) -> pd.DataFrame:
 def _aplicar_color_serie(serie, color_hex: str) -> None:
     serie.graphicalProperties.line.solidFill = color_hex
     serie.graphicalProperties.line.width = 20000
-    # Sin marcadores: líneas más limpias
-    serie.marker = None
+    # Sin vértices/marcadores
+    serie.marker = Marker(symbol="none")
     serie.smooth = False
+
+
+def _texto_blanco(sz: int = 1000, bold: bool = False) -> CharacterProperties:
+    return CharacterProperties(sz=sz, b=bold, solidFill="FFFFFF")
+
+
+def _titulo_blanco(chart, texto: str) -> None:
+    chart.title = texto
+    try:
+        p = chart.title.tx.rich.p[0]
+        p.pPr = ParagraphProperties(defRPr=_texto_blanco(1200, bold=True))
+        if p.r:
+            p.r[0].rPr = _texto_blanco(1200, bold=True)
+    except Exception:
+        pass
+
+
+def _ejes_blancos(chart) -> None:
+    """Etiquetas de ejes legibles sobre fondo negro."""
+    def _rich():
+        return RichText(
+            p=[
+                Paragraph(
+                    pPr=ParagraphProperties(defRPr=_texto_blanco(900)),
+                    endParaRPr=_texto_blanco(900),
+                )
+            ]
+        )
+
+    chart.x_axis.txPr = _rich()
+    chart.y_axis.txPr = _rich()
+
+
+def _fondo_negro_grafico(chart) -> None:
+    """Área del gráfico + plot en negro."""
+    chart.graphical_properties = GraphicalProperties(solidFill="000000")
+    chart.plot_area.graphicalProperties = GraphicalProperties(solidFill="000000")
+    _ejes_blancos(chart)
 
 
 def _estilizar_tabla(ws, n_rows: int, n_cols: int) -> None:
@@ -195,7 +241,7 @@ def _agregar_graficos_hoja(ws, n_rows: int, n_cols: int, colores: dict[int, str]
     cats = Reference(ws, min_col=col_year, min_row=2, max_row=n_rows)
 
     chart_all = LineChart()
-    chart_all.title = "Evolución de Coberturas"
+    _titulo_blanco(chart_all, "Evolución de Coberturas")
     chart_all.height = 10
     chart_all.width = 18
     chart_all.y_axis.title = None
@@ -217,8 +263,9 @@ def _agregar_graficos_hoja(ws, n_rows: int, n_cols: int, colores: dict[int, str]
         header = ws.cell(row=1, column=col_idx).value
         id_val = _id_desde_header(header) or 0
         if i < len(chart_all.series):
-            _aplicar_color_serie(chart_all.series[i], colores.get(id_val, "000000"))
+            _aplicar_color_serie(chart_all.series[i], colores.get(id_val, "FFFFFF"))
 
+    _fondo_negro_grafico(chart_all)
     ws.add_chart(chart_all, "H2")
 
     start_row = 22
@@ -228,7 +275,7 @@ def _agregar_graficos_hoja(ws, n_rows: int, n_cols: int, colores: dict[int, str]
         titulo = LEYENDA_MAPBIOMAS.get(id_val, {}).get("label", str(header))
 
         c = LineChart()
-        c.title = titulo
+        _titulo_blanco(c, titulo)
         c.height = 8
         c.width = 11
         c.legend = None
@@ -237,8 +284,9 @@ def _agregar_graficos_hoja(ws, n_rows: int, n_cols: int, colores: dict[int, str]
         c.add_data(d, titles_from_data=True)
         c.set_categories(cats)
         if c.series:
-            _aplicar_color_serie(c.series[0], colores.get(id_val, "000000"))
+            _aplicar_color_serie(c.series[0], colores.get(id_val, "FFFFFF"))
 
+        _fondo_negro_grafico(c)
         col_pos = "H" if idx % 2 == 0 else "R"
         row_pos = start_row + (idx // 2) * 16
         ws.add_chart(c, f"{col_pos}{row_pos}")
