@@ -111,18 +111,15 @@ def iniciar_servicios_una_vez():
 
 def procesar_sincronizacion():
     """
-    Gestiona el flujo de sincronización automática una vez por sesión de usuario.
-    Si se cambió la fuente de estadísticas, fuerza una sync completa de esa carpeta.
+    Sincroniza la carpeta GEE de la fuente activa hacia la BD local.
     """
-    forzar = st.session_state.pop("forzar_sincro", False)
-    if forzar or "ultima_sincro" not in st.session_state:
-        with st.spinner("Sincronizando carpeta de estadísticas activa…"):
-            ok_info = sincronizar_todo_interno()
-            if hay_assets_sin_stats():
-                rellenar_stats_faltantes_desde_gee()
-        st.session_state.ultima_sincro = True
-        return ok_info
-    return None
+    with st.spinner("Sincronizando carpeta de estadísticas activa…"):
+        ok_info = sincronizar_todo_interno()
+        if hay_assets_sin_stats():
+            rellenar_stats_faltantes_desde_gee()
+    st.session_state.ultima_sincro = True
+    st.session_state.forzar_sincro = False
+    return ok_info
 
 
 @st.dialog("⚙️ ASSETS Y GEE", width="large")
@@ -140,44 +137,26 @@ def main():
     Punto de entrada principal que coordina el flujo de datos y la interfaz.
     """
     from config import FUENTE_DEFAULT
-    from data.stats_source import get_active_asset_parent
+    from data.stats_source import get_active_asset_parent, label_para_fuente, get_fuente_activa
 
     configurar_app()
-    # Fijar fuente ANTES del sync (default = STATISTICS_GENERAL en esta rama).
     if "fuente_stats" not in st.session_state:
         st.session_state.fuente_stats = FUENTE_DEFAULT
 
     iniciar_servicios_una_vez()
 
-    if st.session_state.get("forzar_sincro") or "ultima_sincro" not in st.session_state:
+    # Sync solo bajo demanda (evita colgar el arranque / "Stopping...").
+    if st.session_state.pop("forzar_sincro", False):
         parent = get_active_asset_parent().rstrip("/")
-        st.caption(f"Sincronizando: `{parent}`")
-        # Con STATISTICS_GENERAL suele haber pocos assets: no mostrar el aviso de Neon “varios minutos”.
-        es_general = "STATISTICS_GENERAL" in parent
-        if is_postgres() and "ultima_sincro" not in st.session_state and not st.session_state.get("forzar_sincro") and not es_general:
-            st.info(
-                "**Primera sincronización con la base en la nube (Neon):** se descargan "
-                "assets y estadísticas desde Earth Engine. Suele tardar **varios minutos** "
-                "si la base está vacía; la pestaña puede parecer quieta pero el proceso sigue. "
-                "No cierres el navegador."
-            )
-            with st.spinner("Sincronizando con Google Earth Engine…"):
-                procesar_sincronizacion()
-            st.rerun()
-        else:
-            with st.spinner(f"Sincronizando `{parent.split('/')[-1]}`…"):
-                res = procesar_sincronizacion()
-            if res is not None:
-                total, nombres, ok = res
-                if not ok:
-                    st.error(
-                        "No se pudo sincronizar la carpeta GEE activa. "
-                        f"Revisa permisos sobre `{parent}`."
-                    )
-                elif total:
-                    st.success(f"Sync OK: {total} asset(s) nuevo(s). {nombres}")
-                else:
-                    st.caption("Sync OK (sin assets nuevos en esta carpeta).")
+        res = procesar_sincronizacion()
+        if res is not None:
+            total, nombres, ok = res
+            if not ok:
+                st.error(f"No se pudo sincronizar `{parent}`.")
+            elif total:
+                st.success(f"Sync OK: {total} nuevo(s) — {nombres}")
+            else:
+                st.caption("Sync OK (sin assets nuevos).")
 
     if "thumbnails" not in st.session_state:
         st.session_state.thumbnails = None
@@ -202,8 +181,6 @@ def main():
             )
 
     with col_title:
-        from data.stats_source import label_para_fuente, get_fuente_activa
-
         alcance_txt = f"Bioma {bioma_sel}" if scope == "bioma" else f"Región {region_id}"
         fuente_txt = label_para_fuente(get_fuente_activa())
         st.markdown(f"""
@@ -215,7 +192,10 @@ def main():
 
     if modo == list(MODOS_APP.values())[0]:
         if scope == "region" and not version_sel:
-            st.info("💡 Selecciona versiones en el panel lateral para iniciar el análisis.")
+            st.info(
+                "💡 Pulsa **Sincronizar ahora** en el panel lateral si aún no hay datos, "
+                "luego selecciona versiones para analizar."
+            )
             st.stop()
 
         with st.spinner("Cargando datos..."):

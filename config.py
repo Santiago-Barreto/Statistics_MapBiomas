@@ -8,6 +8,9 @@ ASSET_PARENT = "projects/mapbiomas-colombia/assets/LULC/COLECCION4/ESTADISTICAS/
 ASSET_PARENT_GENERAL = "projects/ee-my-andesnorte/assets/STATISTICS_GENERAL/"
 ASSET_REGIONES = "projects/mapbiomas-colombia/assets/DATOS_AUXILIARES/VECTORES/col-clasificacion-regiones-c3"
 
+# En esta rama de análisis: SQLite local (evita deadlocks/colas de Neon al sync).
+FORZAR_SQLITE = True
+
 # Fuentes de estadísticas: la colección MapBiomas es el default estable.
 FUENTE_COLECCION = "coleccion"
 FUENTE_GENERAL = "general"

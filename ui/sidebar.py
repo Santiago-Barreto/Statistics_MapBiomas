@@ -51,11 +51,15 @@ def render_sidebar():
         fuente = FUENTES_ESTADISTICAS[fuente_label]
         if set_fuente_activa(fuente):
             st.session_state.pop("ultima_sincro", None)
-            st.session_state.forzar_sincro = True
-            st.info(f"Fuente cambiada a **{fuente_label}**. Re-sincronizando…")
-            st.rerun()
+            st.info(
+                f"Fuente: **{fuente_label}**. Pulsa **Sincronizar ahora** para cargar esa carpeta."
+            )
 
         st.caption(f"GEE: `{get_active_asset_parent().rstrip('/')}`")
+        if st.button("🔄 Sincronizar ahora", use_container_width=True):
+            st.session_state.forzar_sincro = True
+            st.rerun()
+        st.caption("La app carga sin sync automático (así no se cuelga).")
         st.divider()
 
         _modo_keys = list(MODOS_APP.keys())

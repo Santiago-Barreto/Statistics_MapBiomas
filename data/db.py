@@ -33,6 +33,15 @@ def _resolve_database_url() -> str | None:
     if _database_url_cache is not False:
         return _database_url_cache if _database_url_cache else None
 
+    try:
+        import config as _cfg
+
+        if getattr(_cfg, "FORZAR_SQLITE", False):
+            _database_url_cache = None
+            return None
+    except Exception:
+        pass
+
     url = (os.environ.get("DATABASE_URL") or "").strip()
     if url:
         _database_url_cache = url
