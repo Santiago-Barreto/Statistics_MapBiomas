@@ -156,9 +156,14 @@ def _render_exportar_version_final(region_id, version_sel):
                     "bytes": payload,
                     "name": f"region_{region_id}_complete.xlsx",
                     "n": len(data_dict),
+                    "sig": tuple(sorted(version_sel)),
                 }
 
     excel = st.session_state.get("excel_final")
+    # Invalidar caché si cambió la selección de versiones.
+    if excel and excel.get("sig") != tuple(sorted(version_sel or [])):
+        st.session_state.pop("excel_final", None)
+        excel = None
     if excel:
         st.download_button(
             label=f"⬇️ Descargar {excel['name']} ({excel['n']} hojas)",
