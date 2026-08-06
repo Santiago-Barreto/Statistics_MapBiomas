@@ -59,6 +59,12 @@ def _nombre_proceso_hoja(asset_o_label: str) -> str:
     a partir del asset (R30450_V2-gapfill → GAPFILL_V2).
     """
     label = str(asset_o_label).rsplit("/", 1)[-1].replace("-", "_")
+
+    # Ya viene como NOMBRE_VX (p. ej. hoja de REGIÓN_*.xlsx).
+    m_ready = re.match(r"^([A-Za-zÁÉÍÓÚÑ_]+)_V(\d+)$", label, re.IGNORECASE)
+    if m_ready:
+        return f"{m_ready.group(1).upper()}_V{m_ready.group(2)}"
+
     m = re.search(r"_V(\d+)[_-]?(.*)$", label, re.IGNORECASE)
     if not m:
         return _sheet_name(label, set())
