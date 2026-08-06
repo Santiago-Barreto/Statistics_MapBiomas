@@ -163,77 +163,93 @@ def sincronizar_todo_interno():
     """
     Compara el inventario local con Google Earth Engine para coberturas, descarga estadísticas para nuevos assets y 
     retorna un resumen de los cambios realizados.
-    """
-    conn = None
 
+    Las llamadas a GEE se hacen SIN mantener abierta la conexión SQLite (evita database is locked).
+    """
+    try:
+        remote_assets_cob = ee.data.listAssets({"parent": ASSET_PARENT}).get("assets", [])
+    except Exception:
+        return 0, "", False
+
+    remote_ids_cob = {a.get("id") for a in remote_assets_cob if a.get("id")}
+
+    try:
+        bioma_mapping_raw = ee.FeatureCollection(ASSET_REGIONES).reduceColumns(
+            ee.Reducer.toList().repeat(2), ["id_regionC", "bioma"]
+        ).getInfo()
+    except Exception:
+        bioma_mapping_raw = {"list": [[], []]}
+
+    listas = bioma_mapping_raw.get("list", [[], []])
+    bioma_dict = dict(zip([str(x) for x in listas[0]], listas[1]))
+
+    conn = None
     try:
         conn = get_conn()
         cur = conn.cursor()
-        remote_assets_cob = ee.data.listAssets({'parent': ASSET_PARENT}).get('assets', [])
+        cur.execute("SELECT asset_id FROM assets")
+        local_ids_cob = {r[0] for r in cur.fetchall()}
+        cur.execute("SELECT DISTINCT asset_id FROM stats")
+        stats_ids = {r[0] for r in cur.fetchall()}
     except Exception:
         if conn is not None:
             conn.close()
         return 0, "", False
+    finally:
+        if conn is not None:
+            conn.close()
+            conn = None
 
-    remote_ids_cob = {a.get('id') for a in remote_assets_cob if a.get('id')}
-
-    try:
-        bioma_mapping_raw = ee.FeatureCollection(ASSET_REGIONES).reduceColumns(
-            ee.Reducer.toList().repeat(2), ['id_regionC', 'bioma']
-        ).getInfo()
-    except Exception:
-        bioma_mapping_raw = {'list': [[], []]}
-
-    listas = bioma_mapping_raw.get('list', [[], []])
-    bioma_dict = dict(zip([str(x) for x in listas[0]], listas[1]))
-
-    cur.execute("SELECT asset_id FROM assets")
-    local_ids_cob = {r[0] for r in cur.fetchall()}
-
-    # Salvaguarda: si la consulta remota devuelve vacío pero ya hay datos locales,
-    # asumimos fallo transitorio (autenticación/conectividad) y no borramos nada.
     if not remote_ids_cob and local_ids_cob:
-        conn.close()
         return 0, "", False
 
     new_assets_cob = remote_ids_cob - local_ids_cob
-
-    nombres_nuevos = [nid.split('/')[-1] for nid in new_assets_cob]
-    # Política de persistencia local: no borrar assets/estadísticas de forma automática.
-    # Si hay inconsistencias remotas temporales, la base local se conserva como caché.
-    cur.execute("SELECT DISTINCT asset_id FROM stats")
-    stats_ids = {r[0] for r in cur.fetchall()}
     assets_sin_stats = (remote_ids_cob & local_ids_cob) - stats_ids
+    nombres_nuevos = [nid.split("/")[-1] for nid in new_assets_cob]
 
+    # Descargar stats desde GEE fuera de la transacción SQLite.
+    stats_por_asset: dict[str, list] = {}
+    for a_id in new_assets_cob | assets_sin_stats:
+        raw_data = leer_stats_procesadas(a_id)
+        if raw_data:
+            stats_por_asset[a_id] = raw_data
+
+    filas_assets = []
+    ahora = int(time.time())
     for asset in remote_assets_cob:
-        a_id = asset.get('id')
+        a_id = asset.get("id")
         if not a_id:
             continue
-        label = a_id.split('/')[-1]
-        label_norm = label.replace('-', '_')
-        region_id = label_norm.split('_V')[0].replace('R', '')
+        label = a_id.split("/")[-1]
+        label_norm = label.replace("-", "_")
+        region_id = label_norm.split("_V")[0].replace("R", "")
         bioma = bioma_dict.get(region_id, "Sin Bioma")
+        filas_assets.append((a_id, region_id, bioma, label, ahora))
 
-        cur.execute(
-            insert_assets_upsert_sql(),
-            (a_id, region_id, bioma, label, int(time.time())),
-        )
-
-        if a_id in new_assets_cob or a_id in assets_sin_stats:
-            raw_data = leer_stats_procesadas(a_id)
-
-            if raw_data:
+    def _escribir():
+        c = get_conn()
+        try:
+            cur = c.cursor()
+            cur.executemany(insert_assets_upsert_sql(), filas_assets)
+            for a_id, raw_data in stats_por_asset.items():
                 rows_cob = _construir_rows_stats(a_id, raw_data)
-
                 if rows_cob:
                     cur.executemany(insert_stats_upsert_sql(), rows_cob)
+            c.commit()
+            return True
+        except DB_OPERATIONAL_ERRORS:
+            c.rollback()
+            return False
+        finally:
+            c.close()
+
+    from data.db import with_sqlite_retry
 
     try:
-        conn.commit()
+        ok = with_sqlite_retry(_escribir)
     except DB_OPERATIONAL_ERRORS:
-        conn.rollback()
         return 0, "", False
-    finally:
-        conn.close()
 
+    if not ok:
+        return 0, "", False
     return len(nombres_nuevos), ", ".join(nombres_nuevos), True

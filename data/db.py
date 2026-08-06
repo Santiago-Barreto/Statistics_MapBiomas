@@ -122,12 +122,29 @@ def get_conn():
         return psycopg2.connect(url, connect_timeout=25)
 
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=60)
     conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA busy_timeout=30000;")
+    conn.execute("PRAGMA busy_timeout=60000;")
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
+
+
+def with_sqlite_retry(fn, intentos: int = 5, pausa: float = 0.4):
+    """Reintenta una operación SQLite ante 'database is locked'."""
+    import time
+
+    ultimo = None
+    for i in range(intentos):
+        try:
+            return fn()
+        except sqlite3.OperationalError as exc:
+            ultimo = exc
+            if "locked" not in str(exc).lower() or i == intentos - 1:
+                raise
+            time.sleep(pausa * (i + 1))
+    raise ultimo
+
 
 
 def inicializar_db():

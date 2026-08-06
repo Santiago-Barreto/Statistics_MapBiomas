@@ -30,7 +30,12 @@ def render_sidebar():
     bioma_sel = None
 
     with st.sidebar:
-    
+        st.caption("Rama local de pruebas · SQLite")
+        if st.button("🔄 Sincronizar ahora", use_container_width=True):
+            st.session_state.forzar_sincro = True
+            st.rerun()
+        st.divider()
+
         _modo_keys = list(MODOS_APP.keys())
         if len(_modo_keys) == 1:
             modo_label = _modo_keys[0]

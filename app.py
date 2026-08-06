@@ -7,9 +7,13 @@ y renderizado de los componentes principales de la aplicación.
 
 import streamlit as st
 from config import MODOS_APP
-from data.db import inicializar_db, is_postgres
+from data.db import inicializar_db
 from gee.init import inicializar_gee
-from sync.manager import chequeo_automatico_sincro, rellenar_stats_faltantes_desde_gee
+from sync.manager import (
+    hay_assets_sin_stats,
+    rellenar_stats_faltantes_desde_gee,
+    sincronizar_todo_interno,
+)
 from data.processing import cargar_datos_totales, cargar_datos_bioma, cargar_aportes_regionales_bioma
 from ui.sidebar import render_sidebar
 from ui.map import render_visual_inspector
@@ -105,13 +109,6 @@ def iniciar_servicios_una_vez():
     inicializar_gee()
     return True
 
-def procesar_sincronizacion():
-    """
-    Gestiona el flujo de sincronización automática una vez por sesión de usuario.
-    """
-    if "ultima_sincro" not in st.session_state:
-        chequeo_automatico_sincro()
-        st.session_state.ultima_sincro = True
 
 @st.dialog("⚙️ ASSETS Y GEE", width="large")
 def mostrar_admin_dialog(modo, region_id, bioma_sel=None):
@@ -129,19 +126,17 @@ def main():
     configurar_app()
     iniciar_servicios_una_vez()
 
-    if "ultima_sincro" not in st.session_state:
-        if is_postgres():
-            st.info(
-                "**Primera sincronización con la base en la nube (Neon):** se descargan "
-                "assets y estadísticas desde Earth Engine. Suele tardar **varios minutos** "
-                "si la base está vacía; la pestaña puede parecer quieta pero el proceso sigue. "
-                "No cierres el navegador."
-            )
-            with st.spinner("Sincronizando con Google Earth Engine…"):
-                procesar_sincronizacion()
-            st.rerun()
+    # Rama local: no sync automático al abrir (evita database is locked / Stopping...).
+    if st.session_state.pop("forzar_sincro", False):
+        with st.spinner("Sincronizando GEE → SQLite local…"):
+            total, nombres, ok = sincronizar_todo_interno()
+            if hay_assets_sin_stats():
+                rellenar_stats_faltantes_desde_gee()
+        if ok:
+            st.success(f"Sync OK ({total} nuevos). {nombres}")
         else:
-            procesar_sincronizacion()
+            st.error("Sync falló. Revisa GEE / permisos.")
+        st.session_state.ultima_sincro = True
 
     if "thumbnails" not in st.session_state:
         st.session_state.thumbnails = None
