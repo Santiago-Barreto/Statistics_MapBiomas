@@ -135,61 +135,32 @@ def render_sidebar():
 
 def _render_exportar_version_final(region_id, version_sel):
     """Botón bajo Visualización: Excel con gráficas desde las versiones seleccionadas."""
-    import importlib
-    from pathlib import Path
-
-    from export import excel_charts as _excel_mod
-
-    # Recarga el módulo: Streamlit a veces sigue con código viejo en memoria.
-    _excel_mod = importlib.reload(_excel_mod)
-    estilo_ver = getattr(_excel_mod, "ESTILO_EXCEL_VERSION", 0)
-
-    st.caption(
-        f"Una hoja por versión + gráficas (estilo Excel **v{estilo_ver}**: fondo negro, sin vértices)."
-    )
+    st.caption("Una hoja por versión seleccionada + gráficas MapBiomas.")
     disabled = not version_sel
     if st.button(
         "📥 Exportar versión final",
         use_container_width=True,
         disabled=disabled,
-        help="Requiere marcar al menos una versión arriba. Regenera el archivo (no uses un Excel viejo).",
-        key=f"btn_export_final_v{estilo_ver}",
+        help="Requiere marcar al menos una versión arriba.",
     ):
         from data.processing import cargar_datos_totales
+        from export.excel_charts import generar_excel_con_graficas_desde_data_dict
 
         with st.spinner("Generando Excel…"):
             data_dict = cargar_datos_totales(version_sel)
             if not data_dict:
                 st.error("No hay estadísticas en la BD para esas versiones. Sincroniza primero.")
             else:
-                payload = _excel_mod.generar_excel_con_graficas_desde_data_dict(data_dict)
-                name = f"region_{region_id}_complete_estilo{estilo_ver}.xlsx"
-                # Siempre escribir a disco: el navegador a veces reutiliza descargas viejas.
-                out_path = Path(__file__).resolve().parent.parent / name
-                out_path.write_bytes(payload)
+                payload = generar_excel_con_graficas_desde_data_dict(data_dict)
                 st.session_state["excel_final"] = {
                     "bytes": payload,
-                    "name": name,
-                    "path": str(out_path),
+                    "name": f"region_{region_id}_complete.xlsx",
                     "n": len(data_dict),
                     "sig": tuple(sorted(version_sel)),
-                    "estilo": estilo_ver,
                 }
-                st.success(
-                    f"Excel estilo v{estilo_ver} listo ({len(data_dict)} hojas).\n\n"
-                    f"Archivo en disco:\n`{out_path}`"
-                )
-                st.info(
-                    "Abre ese archivo desde el Explorador (no uses "
-                    "`region_*_complete.xlsx` ni `*(2).xlsx` viejos)."
-                )
 
     excel = st.session_state.get("excel_final")
-    # Invalidar si cambió selección o versión de estilo del Excel.
-    if excel and (
-        excel.get("sig") != tuple(sorted(version_sel or []))
-        or excel.get("estilo") != estilo_ver
-    ):
+    if excel and excel.get("sig") != tuple(sorted(version_sel or [])):
         st.session_state.pop("excel_final", None)
         excel = None
     if excel:
@@ -199,7 +170,5 @@ def _render_exportar_version_final(region_id, version_sel):
             file_name=excel["name"],
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
-            key=f"dl_excel_final_v{estilo_ver}_{excel.get('n')}",
+            key="dl_excel_final",
         )
-        if excel.get("path"):
-            st.caption(f"También guardado en: {excel['path']}")

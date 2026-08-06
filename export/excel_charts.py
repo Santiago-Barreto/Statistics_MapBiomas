@@ -1,53 +1,55 @@
 """
-Exportación Excel con gráficas de evolución de coberturas (openpyxl).
+Exportación Excel con gráficas (flujo original Colab / openpyxl).
 
 Una hoja por versión + gráfico general e individuales con colores MapBiomas.
-Escritura en un solo paso (sin roundtrip pandas→load_workbook) para evitar
-corrupción de drawings que Excel repara al abrir.
+Nombre de descarga esperado: region_{id}_complete.xlsx
 """
 
 from __future__ import annotations
 
 import io
 import re
+import tempfile
+from pathlib import Path
 from typing import Mapping
 
 import pandas as pd
-from openpyxl import Workbook
+from openpyxl import load_workbook
 from openpyxl.chart import LineChart, Reference
-from openpyxl.chart.marker import Marker
-from openpyxl.chart.shapes import GraphicalProperties
-from openpyxl.chart.text import RichText
-from openpyxl.drawing.text import (
-    CharacterProperties,
-    Paragraph,
-    ParagraphProperties,
-)
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
-from openpyxl.utils.dataframe import dataframe_to_rows
 
-from config import LEYENDA_MAPBIOMAS
+COLUMNAS_EXCLUIR = ["system:index", "descripcion", "version", ".geo", "geo"]
 
-COLUMNAS_EXCLUIR = {"system:index", "descripcion", "version", ".geo", "geo"}
-
-# Subir esto invalida el Excel en session_state de Streamlit.
-ESTILO_EXCEL_VERSION = 4
-
-_HEADER_FILL = PatternFill("solid", fgColor="1F8D49")
-_HEADER_FONT = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-_CELL_FONT = Font(name="Calibri", size=10, color="333333")
-_YEAR_FONT = Font(name="Calibri", size=10, bold=True, color="333333")
-_ALT_FILL = PatternFill("solid", fgColor="F3F6F4")
-_HEADER_BORDER = Border(bottom=Side(style="medium", color="0E5C2F"))
-_NO_BORDER = Border()
-
-
-def _colores_hex() -> dict[int, str]:
-    return {
-        int(cid): info["color"].lstrip("#").upper()
-        for cid, info in LEYENDA_MAPBIOMAS.items()
-    }
+# Colores MapBiomas (script original)
+COLORES_ID = {
+    1: "1F8D49",
+    3: "1F8D49",
+    5: "04381D",
+    6: "026975",
+    49: "02D659",
+    10: "D6BC74",
+    11: "519799",
+    12: "D6BC74",
+    32: "FC8114",
+    29: "FFAA5F",
+    50: "AD5100",
+    14: "FFEFC3",
+    9: "7A5900",
+    35: "9065D0",
+    74: "BE83F7",
+    21: "FFEFC3",
+    22: "D4271E",
+    23: "FFA07A",
+    24: "D4271E",
+    30: "9C0027",
+    68: "E97A7A",
+    25: "DB4D4F",
+    75: "C12100",
+    26: "2532E4",
+    33: "2532E4",
+    31: "091077",
+    34: "93DFE6",
+    27: "000000",
+}
 
 
 def _id_desde_header(header) -> int | None:
@@ -75,13 +77,9 @@ def _normalizar_cols_id(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _nombre_proceso_hoja(asset_o_label: str) -> str:
-    """
-    Deriva el nombre de hoja tipo GAPFILL_V2 / CLASIFICACION_ORIGINAL_V1
-    a partir del asset (R30450_V2-gapfill → GAPFILL_V2).
-    """
+    """Deriva nombre de hoja tipo GAPFILL_V2 / CLASIFICACION_ORIGINAL_V1."""
     label = str(asset_o_label).rsplit("/", 1)[-1].replace("-", "_")
 
-    # Ya viene como NOMBRE_VX (p. ej. hoja de REGIÓN_*.xlsx).
     m_ready = re.match(r"^([A-Za-zÁÉÍÓÚÑ_]+)_V(\d+)$", label, re.IGNORECASE)
     if m_ready:
         return f"{m_ready.group(1).upper()}_V{m_ready.group(2)}"
@@ -93,7 +91,6 @@ def _nombre_proceso_hoja(asset_o_label: str) -> str:
     version = m.group(1)
     sufijo = (m.group(2) or "").lower().strip("_")
 
-    # Mapeo alineado a region_*_complete.xlsx
     if "join" in sufijo:
         nombre = "JOIN"
     elif "gapfill" in sufijo:
@@ -128,10 +125,9 @@ def _sheet_name(nombre: str, usados: set[str]) -> str:
     return limpio
 
 
-def _df_limpio(df: pd.DataFrame) -> pd.DataFrame:
+def _df_para_hoja(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    drop = [c for c in out.columns if c in COLUMNAS_EXCLUIR or c == "version"]
-    out = out.drop(columns=drop, errors="ignore")
+    out = out.drop(columns=[c for c in COLUMNAS_EXCLUIR if c in out.columns], errors="ignore")
     out = _normalizar_cols_id(out)
     if "year" not in out.columns:
         raise ValueError("El DataFrame no tiene columna year")
@@ -140,7 +136,6 @@ def _df_limpio(df: pd.DataFrame) -> pd.DataFrame:
         key=lambda c: _id_desde_header(c) or 0,
     )
     out = out[["year"] + id_cols].sort_values("year")
-    # Excel/openpyxl: NaN en series de gráfico corrompe drawings.
     out = out.fillna(0)
     out["year"] = out["year"].astype(int)
     for c in id_cols:
@@ -148,234 +143,105 @@ def _df_limpio(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _aplicar_color_serie(serie, color_hex: str) -> None:
-    serie.graphicalProperties.line.solidFill = color_hex
-    serie.graphicalProperties.line.width = 25000
-    # symbol=None → XML <symbol val="none"/>. spPr=None evita que Excel
-    # ignore el "none" y vuelva a marcadores automáticos.
-    mk = Marker(symbol=None)
-    mk.spPr = None
-    serie.marker = mk
-    serie.smooth = False
+def _limpiar_formato_grafico(chart) -> None:
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    chart.y_axis.majorGridlines = None
+    chart.x_axis.majorGridlines = None
+    chart.x_axis.tickLblSkip = 0
 
 
-def _texto_blanco(sz: int = 1000, bold: bool = False) -> CharacterProperties:
-    return CharacterProperties(sz=sz, b=bold, solidFill="FFFFFF")
-
-
-def _titulo_blanco(chart, texto: str) -> None:
-    chart.title = texto
-    try:
-        p = chart.title.tx.rich.p[0]
-        p.pPr = ParagraphProperties(defRPr=_texto_blanco(1200, bold=True))
-        if p.r:
-            p.r[0].rPr = _texto_blanco(1200, bold=True)
-    except Exception:
-        pass
-
-
-def _ejes_blancos(chart) -> None:
-    """Etiquetas de ejes legibles sobre fondo negro."""
-
-    def _rich():
-        return RichText(
-            p=[
-                Paragraph(
-                    pPr=ParagraphProperties(defRPr=_texto_blanco(900)),
-                    endParaRPr=_texto_blanco(900),
-                )
-            ]
-        )
-
-    chart.x_axis.txPr = _rich()
-    chart.y_axis.txPr = _rich()
-
-
-def _props_negro() -> GraphicalProperties:
-    props = GraphicalProperties(solidFill="000000")
-    props.line.noFill = True
-    props.line.prstDash = None
-    return props
-
-
-def _fondo_negro_grafico(chart) -> None:
-    """Área del gráfico + plot en negro (sin estilo de tema de Excel)."""
-    chart.style = None
-    chart.roundedCorners = False
-    chart.graphical_properties = _props_negro()
-    chart.plot_area.graphicalProperties = _props_negro()
-    _ejes_blancos(chart)
-
-
-def _postprocess_xlsx_charts(raw: bytes) -> bytes:
-    """
-    Ajuste fino del XML de charts: Excel a veces ignora marcadores/fondo
-    si el spPr del marker viene sucio; también quita majorGridlines.
-    """
-    import re
-    import zipfile
-
-    src = zipfile.ZipFile(io.BytesIO(raw), "r")
-    out_buf = io.BytesIO()
-    with zipfile.ZipFile(out_buf, "w", compression=zipfile.ZIP_DEFLATED) as dst:
-        for info in src.infolist():
-            data = src.read(info.filename)
-            if info.filename.startswith("xl/charts/chart") and info.filename.endswith(".xml"):
-                xml = data.decode("utf-8")
-                # Marcadores limpios: solo symbol=none
-                xml = re.sub(
-                    r"<marker>.*?</marker>",
-                    "<marker><symbol val=\"none\"/></marker>",
-                    xml,
-                    flags=re.DOTALL,
-                )
-                # Sin rejilla horizontal del eje
-                xml = xml.replace("<majorGridlines/>", "")
-                xml = xml.replace("<majorGridlines />", "")
-                data = xml.encode("utf-8")
-            dst.writestr(info, data)
-    src.close()
-    return out_buf.getvalue()
-
-
-def _estilizar_tabla(ws, n_rows: int, n_cols: int) -> None:
-    """Encabezado MapBiomas, filas alternas suaves, sin rejilla densa."""
-    ws.sheet_view.showGridLines = False
-    ws.freeze_panes = "A2"
-
-    for col in range(1, n_cols + 1):
-        cell = ws.cell(row=1, column=col)
-        cell.fill = _HEADER_FILL
-        cell.font = _HEADER_FONT
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border = _HEADER_BORDER
-
-    ws.row_dimensions[1].height = 22
-
-    for row in range(2, n_rows + 1):
-        alt = row % 2 == 0
-        for col in range(1, n_cols + 1):
-            cell = ws.cell(row=row, column=col)
-            cell.font = _YEAR_FONT if col == 1 else _CELL_FONT
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-            cell.border = _NO_BORDER
-            if alt:
-                cell.fill = _ALT_FILL
-            if col == 1:
-                cell.number_format = "0"
-            else:
-                cell.number_format = "#,##0.0"
-
-    # Anchos: year estrecho; coberturas legibles
-    ws.column_dimensions["A"].width = 8
-    for col in range(2, n_cols + 1):
-        letter = get_column_letter(col)
-        header = str(ws.cell(row=1, column=col).value or "")
-        ws.column_dimensions[letter].width = max(10, min(16, len(header) + 4))
-
-
-def _agregar_graficos_hoja(ws, n_rows: int, n_cols: int, colores: dict[int, str]) -> None:
-    """n_cols incluye year en la columna 1; IDs en 2..n_cols."""
-    if n_rows < 2 or n_cols < 2:
+def _agregar_graficos_hoja(ws) -> None:
+    headers = [cell.value for cell in ws[1]]
+    if "year" not in headers:
         return
 
-    headers = [ws.cell(row=1, column=c).value for c in range(1, n_cols + 1)]
-    col_year = 1
-    columnas_id = [i + 1 for i, h in enumerate(headers) if i > 0 and _id_desde_header(h) is not None]
+    col_year = headers.index("year") + 1
+    columnas_id = [
+        i + 1 for i, col in enumerate(headers) if str(col).startswith("ID")
+    ]
     if not columnas_id:
         return
 
-    cats = Reference(ws, min_col=col_year, min_row=2, max_row=n_rows)
+    max_row = ws.max_row
+    cats = Reference(ws, min_col=col_year, min_row=2, max_row=max_row)
 
+    # 1) Gráfico general
     chart_all = LineChart()
-    _titulo_blanco(chart_all, "Evolución de Coberturas")
-    chart_all.height = 10
-    chart_all.width = 18
-    chart_all.y_axis.title = None
-    chart_all.x_axis.title = None
+    chart_all.title = "Evolución de Coberturas"
+    chart_all.height, chart_all.width = 8, 38
     if chart_all.legend is not None:
         chart_all.legend.position = "b"
 
-    data_all = Reference(
-        ws,
-        min_col=min(columnas_id),
-        max_col=max(columnas_id),
-        min_row=1,
-        max_row=n_rows,
-    )
-    chart_all.add_data(data_all, titles_from_data=True)
+    for col_idx in columnas_id:
+        data = Reference(ws, min_col=col_idx, min_row=1, max_row=max_row)
+        chart_all.add_data(data, titles_from_data=True)
+
     chart_all.set_categories(cats)
+    _limpiar_formato_grafico(chart_all)
 
     for i, col_idx in enumerate(columnas_id):
         header = ws.cell(row=1, column=col_idx).value
         id_val = _id_desde_header(header) or 0
+        color = COLORES_ID.get(id_val, "000000")
         if i < len(chart_all.series):
-            _aplicar_color_serie(chart_all.series[i], colores.get(id_val, "FFFFFF"))
+            serie = chart_all.series[i]
+            serie.graphicalProperties.line.solidFill = color
+            serie.graphicalProperties.line.width = 20000
 
-    _fondo_negro_grafico(chart_all)
     ws.add_chart(chart_all, "H2")
 
-    start_row = 22
+    # 2) Individuales
+    start_row = 20
     for idx, col_idx in enumerate(columnas_id):
         header = ws.cell(row=1, column=col_idx).value
         id_val = _id_desde_header(header) or 0
-        titulo = LEYENDA_MAPBIOMAS.get(id_val, {}).get("label", str(header))
+        color = COLORES_ID.get(id_val, "000000")
 
         c = LineChart()
-        _titulo_blanco(c, titulo)
-        c.height = 8
-        c.width = 11
+        c.title = str(header)
+        c.height, c.width = 6, 18
         c.legend = None
 
-        d = Reference(ws, min_col=col_idx, min_row=1, max_row=n_rows)
+        d = Reference(ws, min_col=col_idx, min_row=1, max_row=max_row)
         c.add_data(d, titles_from_data=True)
         c.set_categories(cats)
-        if c.series:
-            _aplicar_color_serie(c.series[0], colores.get(id_val, "FFFFFF"))
+        _limpiar_formato_grafico(c)
 
-        _fondo_negro_grafico(c)
-        col_pos = "H" if idx % 2 == 0 else "R"
-        row_pos = start_row + (idx // 2) * 16
+        if c.series:
+            serie = c.series[0]
+            serie.graphicalProperties.line.solidFill = color
+            serie.graphicalProperties.line.width = 20000
+
+        col_pos = "H" if idx % 2 == 0 else "Z"
+        row_pos = start_row + (idx // 2) * 15
         ws.add_chart(c, f"{col_pos}{row_pos}")
 
 
 def generar_excel_con_graficas_desde_data_dict(
     data_dict: Mapping[str, pd.DataFrame],
 ) -> bytes:
-    """Genera un .xlsx en memoria: una hoja por entrada + gráficas."""
+    """Genera un .xlsx en memoria: una hoja por entrada + gráficas (script original)."""
     if not data_dict:
         raise ValueError("No hay datos para exportar")
 
-    colores = _colores_hex()
-    wb = Workbook()
-    # Quitar hoja por defecto vacía tras crear la primera real
-    default = wb.active
     usados: set[str] = set()
-    first = True
-
+    limpios: dict[str, pd.DataFrame] = {}
     for nombre, df in data_dict.items():
-        # Preferir patrón NOMBRE_VX desde el asset/label (p. ej. GAPFILL_V2).
-        hoja_raw = _nombre_proceso_hoja(nombre)
-        hoja = _sheet_name(hoja_raw, usados)
-        df_clean = _df_limpio(df)
-        if first:
-            ws = default
-            ws.title = hoja
-            first = False
-        else:
-            ws = wb.create_sheet(hoja)
+        hoja = _sheet_name(_nombre_proceso_hoja(nombre), usados)
+        limpios[hoja] = _df_para_hoja(df)
 
-        for row in dataframe_to_rows(df_clean, index=False, header=True):
-            ws.append(row)
+    with tempfile.TemporaryDirectory() as tmp:
+        ruta = Path(tmp) / "complete.xlsx"
+        with pd.ExcelWriter(ruta, engine="openpyxl") as writer:
+            for hoja, df in limpios.items():
+                df.to_excel(writer, sheet_name=hoja, index=False)
 
-        n_rows = ws.max_row
-        n_cols = ws.max_column
-        _estilizar_tabla(ws, n_rows, n_cols)
-        _agregar_graficos_hoja(ws, n_rows, n_cols, colores)
-
-    out = io.BytesIO()
-    wb.save(out)
-    return _postprocess_xlsx_charts(out.getvalue())
+        wb = load_workbook(ruta)
+        for hoja in wb.sheetnames:
+            _agregar_graficos_hoja(wb[hoja])
+        wb.save(ruta)
+        return ruta.read_bytes()
 
 
 def generar_excel_con_graficas_desde_region_xlsx(ruta_o_bytes) -> bytes:
