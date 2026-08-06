@@ -15,11 +15,21 @@ from typing import Mapping
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.chart import LineChart, Reference
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from openpyxl.utils.dataframe import dataframe_to_rows
 
 from config import LEYENDA_MAPBIOMAS
 
 COLUMNAS_EXCLUIR = {"system:index", "descripcion", "version", ".geo", "geo"}
+
+_HEADER_FILL = PatternFill("solid", fgColor="1F8D49")
+_HEADER_FONT = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+_CELL_FONT = Font(name="Calibri", size=10, color="333333")
+_YEAR_FONT = Font(name="Calibri", size=10, bold=True, color="333333")
+_ALT_FILL = PatternFill("solid", fgColor="F3F6F4")
+_HEADER_BORDER = Border(bottom=Side(style="medium", color="0E5C2F"))
+_NO_BORDER = Border()
 
 
 def _colores_hex() -> dict[int, str]:
@@ -129,7 +139,46 @@ def _df_limpio(df: pd.DataFrame) -> pd.DataFrame:
 
 def _aplicar_color_serie(serie, color_hex: str) -> None:
     serie.graphicalProperties.line.solidFill = color_hex
-    serie.graphicalProperties.line.width = 25000
+    serie.graphicalProperties.line.width = 20000
+    # Sin marcadores: líneas más limpias
+    serie.marker = None
+    serie.smooth = False
+
+
+def _estilizar_tabla(ws, n_rows: int, n_cols: int) -> None:
+    """Encabezado MapBiomas, filas alternas suaves, sin rejilla densa."""
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "A2"
+
+    for col in range(1, n_cols + 1):
+        cell = ws.cell(row=1, column=col)
+        cell.fill = _HEADER_FILL
+        cell.font = _HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = _HEADER_BORDER
+
+    ws.row_dimensions[1].height = 22
+
+    for row in range(2, n_rows + 1):
+        alt = row % 2 == 0
+        for col in range(1, n_cols + 1):
+            cell = ws.cell(row=row, column=col)
+            cell.font = _YEAR_FONT if col == 1 else _CELL_FONT
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = _NO_BORDER
+            if alt:
+                cell.fill = _ALT_FILL
+            if col == 1:
+                cell.number_format = "0"
+            else:
+                cell.number_format = "#,##0.0"
+
+    # Anchos: year estrecho; coberturas legibles
+    ws.column_dimensions["A"].width = 8
+    for col in range(2, n_cols + 1):
+        letter = get_column_letter(col)
+        header = str(ws.cell(row=1, column=col).value or "")
+        ws.column_dimensions[letter].width = max(10, min(16, len(header) + 4))
 
 
 def _agregar_graficos_hoja(ws, n_rows: int, n_cols: int, colores: dict[int, str]) -> None:
@@ -145,12 +194,10 @@ def _agregar_graficos_hoja(ws, n_rows: int, n_cols: int, colores: dict[int, str]
 
     cats = Reference(ws, min_col=col_year, min_row=2, max_row=n_rows)
 
-    # --- Gráfico general (bloque contiguo de series) ---
     chart_all = LineChart()
     chart_all.title = "Evolución de Coberturas"
-    chart_all.style = 10
     chart_all.height = 10
-    chart_all.width = 20
+    chart_all.width = 18
     chart_all.y_axis.title = None
     chart_all.x_axis.title = None
     if chart_all.legend is not None:
@@ -174,17 +221,16 @@ def _agregar_graficos_hoja(ws, n_rows: int, n_cols: int, colores: dict[int, str]
 
     ws.add_chart(chart_all, "H2")
 
-    # --- Individuales ---
     start_row = 22
     for idx, col_idx in enumerate(columnas_id):
         header = ws.cell(row=1, column=col_idx).value
         id_val = _id_desde_header(header) or 0
+        titulo = LEYENDA_MAPBIOMAS.get(id_val, {}).get("label", str(header))
 
         c = LineChart()
-        c.title = str(header)
-        c.style = 10
+        c.title = titulo
         c.height = 8
-        c.width = 12
+        c.width = 11
         c.legend = None
 
         d = Reference(ws, min_col=col_idx, min_row=1, max_row=n_rows)
@@ -229,6 +275,7 @@ def generar_excel_con_graficas_desde_data_dict(
 
         n_rows = ws.max_row
         n_cols = ws.max_column
+        _estilizar_tabla(ws, n_rows, n_cols)
         _agregar_graficos_hoja(ws, n_rows, n_cols, colores)
 
     out = io.BytesIO()
