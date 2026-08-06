@@ -31,6 +31,9 @@ from config import LEYENDA_MAPBIOMAS
 
 COLUMNAS_EXCLUIR = {"system:index", "descripcion", "version", ".geo", "geo"}
 
+# Subir esto invalida el Excel en session_state de Streamlit.
+ESTILO_EXCEL_VERSION = 3
+
 _HEADER_FILL = PatternFill("solid", fgColor="1F8D49")
 _HEADER_FONT = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
 _CELL_FONT = Font(name="Calibri", size=10, color="333333")
@@ -147,9 +150,12 @@ def _df_limpio(df: pd.DataFrame) -> pd.DataFrame:
 
 def _aplicar_color_serie(serie, color_hex: str) -> None:
     serie.graphicalProperties.line.solidFill = color_hex
-    serie.graphicalProperties.line.width = 20000
-    # Sin vértices/marcadores
-    serie.marker = Marker(symbol="none")
+    serie.graphicalProperties.line.width = 25000
+    # Sin vértices: symbol=none + sin relleno en el marcador
+    mk = Marker(symbol="none")
+    mk.graphicalProperties = GraphicalProperties(noFill=True)
+    mk.graphicalProperties.line.noFill = True
+    serie.marker = mk
     serie.smooth = False
 
 
@@ -185,7 +191,9 @@ def _ejes_blancos(chart) -> None:
 
 
 def _fondo_negro_grafico(chart) -> None:
-    """Área del gráfico + plot en negro."""
+    """Área del gráfico + plot en negro (sin estilo de tema de Excel)."""
+    chart.style = None  # evita que el tema anule el relleno
+    chart.roundedCorners = False
     chart.graphical_properties = GraphicalProperties(solidFill="000000")
     chart.plot_area.graphicalProperties = GraphicalProperties(solidFill="000000")
     _ejes_blancos(chart)

@@ -135,33 +135,45 @@ def render_sidebar():
 
 def _render_exportar_version_final(region_id, version_sel):
     """Botón bajo Visualización: Excel con gráficas desde las versiones seleccionadas."""
+    import importlib
+
+    from export import excel_charts as _excel_mod
+
+    # Recarga el módulo: Streamlit a veces sigue con código viejo en memoria.
+    _excel_mod = importlib.reload(_excel_mod)
+    estilo_ver = getattr(_excel_mod, "ESTILO_EXCEL_VERSION", 0)
+
     st.caption("Una hoja por versión seleccionada + gráficas MapBiomas.")
     disabled = not version_sel
     if st.button(
         "📥 Exportar versión final",
         use_container_width=True,
         disabled=disabled,
-        help="Requiere marcar al menos una versión arriba.",
+        help="Requiere marcar al menos una versión arriba. Regenera el archivo (no uses un Excel viejo).",
     ):
         from data.processing import cargar_datos_totales
-        from export.excel_charts import generar_excel_con_graficas_desde_data_dict
 
         with st.spinner("Generando Excel…"):
             data_dict = cargar_datos_totales(version_sel)
             if not data_dict:
                 st.error("No hay estadísticas en la BD para esas versiones. Sincroniza primero.")
             else:
-                payload = generar_excel_con_graficas_desde_data_dict(data_dict)
+                payload = _excel_mod.generar_excel_con_graficas_desde_data_dict(data_dict)
                 st.session_state["excel_final"] = {
                     "bytes": payload,
                     "name": f"region_{region_id}_complete.xlsx",
                     "n": len(data_dict),
                     "sig": tuple(sorted(version_sel)),
+                    "estilo": estilo_ver,
                 }
+                st.success("Excel listo — pulsa Descargar (archivo nuevo).")
 
     excel = st.session_state.get("excel_final")
-    # Invalidar caché si cambió la selección de versiones.
-    if excel and excel.get("sig") != tuple(sorted(version_sel or [])):
+    # Invalidar si cambió selección o versión de estilo del Excel.
+    if excel and (
+        excel.get("sig") != tuple(sorted(version_sel or []))
+        or excel.get("estilo") != estilo_ver
+    ):
         st.session_state.pop("excel_final", None)
         excel = None
     if excel:
@@ -171,5 +183,5 @@ def _render_exportar_version_final(region_id, version_sel):
             file_name=excel["name"],
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
-            key="dl_excel_final",
+            key=f"dl_excel_final_v{estilo_ver}",
         )
