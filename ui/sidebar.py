@@ -102,7 +102,10 @@ def render_sidebar():
             
             st.divider()
             modo_vista = st.radio("Visualización", ["Dashboard Completo", "Solo Gráficas", "Comparativa Combinada"])
-            
+
+            if scope == "region":
+                _render_exportar_version_final(region_id, version_sel)
+
             st.divider()
 
             st.subheader("Comparación en GEE")
@@ -120,3 +123,70 @@ def render_sidebar():
         
 
     return region_id, version_sel, modo_vista, modo, scope, bioma_sel
+
+
+def _excel_script_fingerprint() -> str:
+    """Cambia si se edita export/excel_charts.py → invalida Excel en session_state."""
+    import hashlib
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "export" / "excel_charts.py"
+    try:
+        return hashlib.md5(path.read_bytes()).hexdigest()[:10]
+    except OSError:
+        return "0"
+
+
+def _render_exportar_version_final(region_id, version_sel):
+    """Exporta Excel region_{id}_complete.xlsx desde las versiones seleccionadas."""
+    import importlib
+
+    from export import excel_charts as _excel_mod
+
+    _excel_mod = importlib.reload(_excel_mod)
+    script_fp = _excel_script_fingerprint()
+
+    st.caption(
+        "Una hoja por versión + gráficas MapBiomas → "
+        f"`region_{region_id}_complete.xlsx`."
+    )
+    disabled = not version_sel
+    if st.button(
+        "📥 Exportar versión final",
+        use_container_width=True,
+        disabled=disabled,
+        help="Requiere marcar al menos una versión arriba.",
+        key=f"btn_export_final_{script_fp}",
+    ):
+        from data.processing import cargar_datos_totales
+
+        with st.spinner("Generando Excel…"):
+            data_dict = cargar_datos_totales(version_sel)
+            if not data_dict:
+                st.error("No hay estadísticas en la BD para esas versiones. Sincroniza primero.")
+            else:
+                payload = _excel_mod.generar_excel_con_graficas_desde_data_dict(data_dict)
+                st.session_state["excel_final"] = {
+                    "bytes": payload,
+                    "name": f"region_{region_id}_complete.xlsx",
+                    "n": len(data_dict),
+                    "sig": tuple(sorted(version_sel)),
+                    "script_fp": script_fp,
+                }
+
+    excel = st.session_state.get("excel_final")
+    if excel and (
+        excel.get("sig") != tuple(sorted(version_sel or []))
+        or excel.get("script_fp") != script_fp
+    ):
+        st.session_state.pop("excel_final", None)
+        excel = None
+    if excel:
+        st.download_button(
+            label=f"⬇️ Descargar {excel['name']} ({excel['n']} hojas)",
+            data=excel["bytes"],
+            file_name=excel["name"],
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key=f"dl_excel_final_{script_fp}",
+        )
