@@ -1,8 +1,9 @@
 """
 Exportación Excel con gráficas de evolución de coberturas (openpyxl).
 
-Reproduce el flujo Colab: una hoja por versión + gráfico general e individuales
-con colores MapBiomas.
+Una hoja por versión + gráfico general e individuales con colores MapBiomas.
+Escritura en un solo paso (sin roundtrip pandas→load_workbook) para evitar
+corrupción de drawings que Excel repara al abrir.
 """
 
 from __future__ import annotations
@@ -12,8 +13,9 @@ import re
 from typing import Mapping
 
 import pandas as pd
-from openpyxl import load_workbook
+from openpyxl import Workbook
 from openpyxl.chart import LineChart, Reference
+from openpyxl.utils.dataframe import dataframe_to_rows
 
 from config import LEYENDA_MAPBIOMAS
 
@@ -40,7 +42,6 @@ def _id_desde_header(header) -> int | None:
 
 
 def _normalizar_cols_id(df: pd.DataFrame) -> pd.DataFrame:
-    """Asegura columnas de cobertura como ID03, ID21, etc."""
     ren = {}
     for c in df.columns:
         if c in ("year", "version"):
@@ -49,9 +50,7 @@ def _normalizar_cols_id(df: pd.DataFrame) -> pd.DataFrame:
         if id_val is not None:
             ren[c] = f"ID{id_val:02d}" if id_val < 100 else f"ID{id_val}"
     out = df.rename(columns=ren)
-    # Evitar columnas duplicadas tras rename
-    out = out.loc[:, ~out.columns.duplicated()]
-    return out
+    return out.loc[:, ~out.columns.duplicated()]
 
 
 def _sheet_name(nombre: str, usados: set[str]) -> str:
@@ -60,120 +59,133 @@ def _sheet_name(nombre: str, usados: set[str]) -> str:
     i = 1
     while limpio in usados:
         suf = f"_{i}"
-        limpio = (base[: 31 - len(suf)] + suf)
+        limpio = base[: 31 - len(suf)] + suf
         i += 1
     usados.add(limpio)
     return limpio
 
 
-def _limpiar_formato_grafico(chart: LineChart) -> None:
-    chart.x_axis.delete = False
-    chart.y_axis.delete = False
-    chart.y_axis.majorGridlines = None
-    chart.x_axis.majorGridlines = None
-    chart.x_axis.tickLblSkip = 0
-
-
-def _agregar_graficos_hoja(ws, colores: dict[int, str]) -> None:
-    headers = [cell.value for cell in ws[1]]
-    if "year" not in headers:
-        return
-
-    col_year = headers.index("year") + 1
-    columnas_id = [
-        i + 1
-        for i, col in enumerate(headers)
-        if _id_desde_header(col) is not None
-    ]
-    if not columnas_id:
-        return
-
-    max_row = ws.max_row
-    cats = Reference(ws, min_col=col_year, min_row=2, max_row=max_row)
-
-    chart_all = LineChart()
-    chart_all.title = "Evolución de Coberturas"
-    chart_all.height, chart_all.width = 8, 38
-    if chart_all.legend is not None:
-        chart_all.legend.position = "b"
-
-    for col_idx in columnas_id:
-        data = Reference(ws, min_col=col_idx, min_row=1, max_row=max_row)
-        chart_all.add_data(data, titles_from_data=True)
-
-    chart_all.set_categories(cats)
-    _limpiar_formato_grafico(chart_all)
-
-    for i, col_idx in enumerate(columnas_id):
-        header = ws.cell(row=1, column=col_idx).value
-        id_val = _id_desde_header(header) or 0
-        color = colores.get(id_val, "000000")
-        serie = chart_all.series[i]
-        serie.graphicalProperties.line.solidFill = color
-        serie.graphicalProperties.line.width = 20000
-
-    ws.add_chart(chart_all, "H2")
-
-    start_row = 20
-    for idx, col_idx in enumerate(columnas_id):
-        header = ws.cell(row=1, column=col_idx).value
-        id_val = _id_desde_header(header) or 0
-        color = colores.get(id_val, "000000")
-
-        c = LineChart()
-        c.title = str(header)
-        c.height, c.width = 6, 18
-        c.legend = None
-
-        d = Reference(ws, min_col=col_idx, min_row=1, max_row=max_row)
-        c.add_data(d, titles_from_data=True)
-        c.set_categories(cats)
-        _limpiar_formato_grafico(c)
-
-        serie = c.series[0]
-        serie.graphicalProperties.line.solidFill = color
-        serie.graphicalProperties.line.width = 20000
-
-        col_pos = "H" if idx % 2 == 0 else "Z"
-        row_pos = start_row + (idx // 2) * 15
-        ws.add_chart(c, f"{col_pos}{row_pos}")
-
-
-def _df_desde_data_dict_item(df: pd.DataFrame) -> pd.DataFrame:
+def _df_limpio(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     drop = [c for c in out.columns if c in COLUMNAS_EXCLUIR or c == "version"]
     out = out.drop(columns=drop, errors="ignore")
     out = _normalizar_cols_id(out)
     if "year" not in out.columns:
         raise ValueError("El DataFrame no tiene columna year")
-    id_cols = [c for c in out.columns if _id_desde_header(c) is not None]
+    id_cols = sorted(
+        [c for c in out.columns if _id_desde_header(c) is not None],
+        key=lambda c: _id_desde_header(c) or 0,
+    )
     out = out[["year"] + id_cols].sort_values("year")
+    # Excel/openpyxl: NaN en series de gráfico corrompe drawings.
+    out = out.fillna(0)
+    out["year"] = out["year"].astype(int)
+    for c in id_cols:
+        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0)
     return out
+
+
+def _aplicar_color_serie(serie, color_hex: str) -> None:
+    serie.graphicalProperties.line.solidFill = color_hex
+    serie.graphicalProperties.line.width = 25000
+
+
+def _agregar_graficos_hoja(ws, n_rows: int, n_cols: int, colores: dict[int, str]) -> None:
+    """n_cols incluye year en la columna 1; IDs en 2..n_cols."""
+    if n_rows < 2 or n_cols < 2:
+        return
+
+    headers = [ws.cell(row=1, column=c).value for c in range(1, n_cols + 1)]
+    col_year = 1
+    columnas_id = [i + 1 for i, h in enumerate(headers) if i > 0 and _id_desde_header(h) is not None]
+    if not columnas_id:
+        return
+
+    cats = Reference(ws, min_col=col_year, min_row=2, max_row=n_rows)
+
+    # --- Gráfico general (bloque contiguo de series) ---
+    chart_all = LineChart()
+    chart_all.title = "Evolución de Coberturas"
+    chart_all.style = 10
+    chart_all.height = 10
+    chart_all.width = 20
+    chart_all.y_axis.title = None
+    chart_all.x_axis.title = None
+    if chart_all.legend is not None:
+        chart_all.legend.position = "b"
+
+    data_all = Reference(
+        ws,
+        min_col=min(columnas_id),
+        max_col=max(columnas_id),
+        min_row=1,
+        max_row=n_rows,
+    )
+    chart_all.add_data(data_all, titles_from_data=True)
+    chart_all.set_categories(cats)
+
+    for i, col_idx in enumerate(columnas_id):
+        header = ws.cell(row=1, column=col_idx).value
+        id_val = _id_desde_header(header) or 0
+        if i < len(chart_all.series):
+            _aplicar_color_serie(chart_all.series[i], colores.get(id_val, "000000"))
+
+    ws.add_chart(chart_all, "H2")
+
+    # --- Individuales ---
+    start_row = 22
+    for idx, col_idx in enumerate(columnas_id):
+        header = ws.cell(row=1, column=col_idx).value
+        id_val = _id_desde_header(header) or 0
+
+        c = LineChart()
+        c.title = str(header)
+        c.style = 10
+        c.height = 8
+        c.width = 12
+        c.legend = None
+
+        d = Reference(ws, min_col=col_idx, min_row=1, max_row=n_rows)
+        c.add_data(d, titles_from_data=True)
+        c.set_categories(cats)
+        if c.series:
+            _aplicar_color_serie(c.series[0], colores.get(id_val, "000000"))
+
+        col_pos = "H" if idx % 2 == 0 else "R"
+        row_pos = start_row + (idx // 2) * 16
+        ws.add_chart(c, f"{col_pos}{row_pos}")
 
 
 def generar_excel_con_graficas_desde_data_dict(
     data_dict: Mapping[str, pd.DataFrame],
 ) -> bytes:
-    """
-    Genera un .xlsx en memoria: una hoja por entrada de data_dict + gráficas.
-    """
+    """Genera un .xlsx en memoria: una hoja por entrada + gráficas."""
     if not data_dict:
         raise ValueError("No hay datos para exportar")
 
     colores = _colores_hex()
-    buf = io.BytesIO()
+    wb = Workbook()
+    # Quitar hoja por defecto vacía tras crear la primera real
+    default = wb.active
     usados: set[str] = set()
+    first = True
 
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        for nombre, df in data_dict.items():
-            hoja = _sheet_name(nombre, usados)
-            df_clean = _df_desde_data_dict_item(df)
-            df_clean.to_excel(writer, sheet_name=hoja, index=False)
+    for nombre, df in data_dict.items():
+        hoja = _sheet_name(nombre, usados)
+        df_clean = _df_limpio(df)
+        if first:
+            ws = default
+            ws.title = hoja
+            first = False
+        else:
+            ws = wb.create_sheet(hoja)
 
-    buf.seek(0)
-    wb = load_workbook(buf)
-    for hoja in wb.sheetnames:
-        _agregar_graficos_hoja(wb[hoja], colores)
+        for row in dataframe_to_rows(df_clean, index=False, header=True):
+            ws.append(row)
+
+        n_rows = ws.max_row
+        n_cols = ws.max_column
+        _agregar_graficos_hoja(ws, n_rows, n_cols, colores)
 
     out = io.BytesIO()
     wb.save(out)
@@ -181,27 +193,11 @@ def generar_excel_con_graficas_desde_data_dict(
 
 
 def generar_excel_con_graficas_desde_region_xlsx(ruta_o_bytes) -> bytes:
-    """
-    Misma lógica que el script Colab: limpia REGIÓN_*.xlsx y añade gráficas.
-    """
-    colores = _colores_hex()
+    """Limpia REGIÓN_*.xlsx y añade gráficas (utilidad / tests)."""
     xls = pd.ExcelFile(ruta_o_bytes)
-    buf = io.BytesIO()
-    usados: set[str] = set()
-
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        for hoja in xls.sheet_names:
-            df = pd.read_excel(xls, sheet_name=hoja)
-            df = df.drop(columns=[c for c in COLUMNAS_EXCLUIR if c in df.columns])
-            df = _normalizar_cols_id(df)
-            nombre = _sheet_name(hoja, usados)
-            df.to_excel(writer, sheet_name=nombre, index=False)
-
-    buf.seek(0)
-    wb = load_workbook(buf)
-    for hoja in wb.sheetnames:
-        _agregar_graficos_hoja(wb[hoja], colores)
-
-    out = io.BytesIO()
-    wb.save(out)
-    return out.getvalue()
+    data = {}
+    for hoja in xls.sheet_names:
+        df = pd.read_excel(xls, sheet_name=hoja)
+        df = df.drop(columns=[c for c in COLUMNAS_EXCLUIR if c in df.columns])
+        data[hoja] = df
+    return generar_excel_con_graficas_desde_data_dict(data)
