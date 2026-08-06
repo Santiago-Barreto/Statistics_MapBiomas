@@ -154,7 +154,7 @@ def _render_exportar_version_final(region_id, version_sel):
                 payload = generar_excel_con_graficas_desde_data_dict(data_dict)
                 st.session_state["excel_final"] = {
                     "bytes": payload,
-                    "name": f"R{region_id}.xlsx",
+                    "name": f"region_{region_id}_complete.xlsx",
                     "n": len(data_dict),
                 }
 

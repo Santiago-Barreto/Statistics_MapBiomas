@@ -53,6 +53,42 @@ def _normalizar_cols_id(df: pd.DataFrame) -> pd.DataFrame:
     return out.loc[:, ~out.columns.duplicated()]
 
 
+def _nombre_proceso_hoja(asset_o_label: str) -> str:
+    """
+    Deriva el nombre de hoja tipo GAPFILL_V2 / CLASIFICACION_ORIGINAL_V1
+    a partir del asset (R30450_V2-gapfill → GAPFILL_V2).
+    """
+    label = str(asset_o_label).rsplit("/", 1)[-1].replace("-", "_")
+    m = re.search(r"_V(\d+)[_-]?(.*)$", label, re.IGNORECASE)
+    if not m:
+        return _sheet_name(label, set())
+
+    version = m.group(1)
+    sufijo = (m.group(2) or "").lower().strip("_")
+
+    # Mapeo alineado a region_*_complete.xlsx
+    if "join" in sufijo:
+        nombre = "JOIN"
+    elif "gapfill" in sufijo:
+        nombre = "GAPFILL"
+    elif "frecuencia" in sufijo:
+        nombre = "FRECUENCIA"
+    elif "temporal" in sufijo:
+        nombre = "TEMPORAL"
+    elif "espacial" in sufijo:
+        nombre = "ESPACIAL"
+    elif "mapageneral" in sufijo or "mapa_general" in sufijo:
+        nombre = "MAPAGENERAL"
+    elif "clasificacion" in sufijo or sufijo in ("", "v1"):
+        nombre = "CLASIFICACION_ORIGINAL"
+    elif sufijo:
+        nombre = re.sub(r"[^A-Za-z0-9]+", "_", sufijo).strip("_").upper()
+    else:
+        nombre = "BASE"
+
+    return f"{nombre}_V{version}"
+
+
 def _sheet_name(nombre: str, usados: set[str]) -> str:
     limpio = re.sub(r"[\\/*?:\[\]]", "_", str(nombre))[:31] or "Hoja"
     base = limpio
@@ -171,7 +207,9 @@ def generar_excel_con_graficas_desde_data_dict(
     first = True
 
     for nombre, df in data_dict.items():
-        hoja = _sheet_name(nombre, usados)
+        # Preferir patrón NOMBRE_VX desde el asset/label (p. ej. GAPFILL_V2).
+        hoja_raw = _nombre_proceso_hoja(nombre)
+        hoja = _sheet_name(hoja_raw, usados)
         df_clean = _df_limpio(df)
         if first:
             ws = default

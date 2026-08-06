@@ -17,18 +17,27 @@ def test_generar_desde_data_dict_crea_hojas_y_charts():
             "year": [1986, 1987, 1988],
             "ID03": [100.0, 110.0, 120.0],
             "ID21": [200.0, 190.0, 180.0],
-            "version": ["V1", "V1", "V1"],
+            "version": ["V2", "V2", "V2"],
         }
     )
-    raw = generar_excel_con_graficas_desde_data_dict({"CLASIF_V1": df})
+    raw = generar_excel_con_graficas_desde_data_dict({"R30450_V2-gapfill": df})
     assert isinstance(raw, (bytes, bytearray))
     assert len(raw) > 1000
 
     wb = load_workbook(BytesIO(raw))
-    assert "CLASIF_V1" in wb.sheetnames
-    ws = wb["CLASIF_V1"]
+    assert "GAPFILL_V2" in wb.sheetnames
+    ws = wb["GAPFILL_V2"]
     assert ws.max_row >= 4
     assert len(ws._charts) >= 1
+
+
+def test_nombre_hoja_patron_complete():
+    from export.excel_charts import _nombre_proceso_hoja
+
+    assert _nombre_proceso_hoja("R30450_V7-filtro-espacial") == "ESPACIAL_V7"
+    assert _nombre_proceso_hoja("R30450_V1-clasificacion-v1") == "CLASIFICACION_ORIGINAL_V1"
+    assert _nombre_proceso_hoja("R30450_V11-clasificacion-join") == "JOIN_V11"
+    assert _nombre_proceso_hoja("R30450_V5-MapaGeneral") == "MAPAGENERAL_V5"
 
 
 def test_generar_desde_region_xlsx(tmp_path):
