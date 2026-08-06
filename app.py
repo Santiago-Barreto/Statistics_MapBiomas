@@ -150,8 +150,11 @@ def main():
     iniciar_servicios_una_vez()
 
     if st.session_state.get("forzar_sincro") or "ultima_sincro" not in st.session_state:
-        st.caption(f"Sincronizando: `{get_active_asset_parent().rstrip('/')}`")
-        if is_postgres() and "ultima_sincro" not in st.session_state and not st.session_state.get("forzar_sincro"):
+        parent = get_active_asset_parent().rstrip("/")
+        st.caption(f"Sincronizando: `{parent}`")
+        # Con STATISTICS_GENERAL suele haber pocos assets: no mostrar el aviso de Neon “varios minutos”.
+        es_general = "STATISTICS_GENERAL" in parent
+        if is_postgres() and "ultima_sincro" not in st.session_state and not st.session_state.get("forzar_sincro") and not es_general:
             st.info(
                 "**Primera sincronización con la base en la nube (Neon):** se descargan "
                 "assets y estadísticas desde Earth Engine. Suele tardar **varios minutos** "
@@ -162,19 +165,19 @@ def main():
                 procesar_sincronizacion()
             st.rerun()
         else:
-            res = procesar_sincronizacion()
+            with st.spinner(f"Sincronizando `{parent.split('/')[-1]}`…"):
+                res = procesar_sincronizacion()
             if res is not None:
                 total, nombres, ok = res
                 if not ok:
                     st.error(
                         "No se pudo sincronizar la carpeta GEE activa. "
-                        f"Revisa permisos sobre `{get_active_asset_parent().rstrip('/')}`."
+                        f"Revisa permisos sobre `{parent}`."
                     )
-                elif total == 0:
-                    st.info(
-                        "Sync OK. No hay assets nuevos; si el panel está vacío, "
-                        "confirma que existen FeatureCollections en la carpeta activa."
-                    )
+                elif total:
+                    st.success(f"Sync OK: {total} asset(s) nuevo(s). {nombres}")
+                else:
+                    st.caption("Sync OK (sin assets nuevos en esta carpeta).")
 
     if "thumbnails" not in st.session_state:
         st.session_state.thumbnails = None

@@ -46,10 +46,12 @@ def rellenar_stats_faltantes_desde_gee(asset_ids=None):
     Descarga estadísticas desde GEE para assets que existen localmente pero
     tienen tabla stats vacía (p. ej. fallo anterior de red o sincro saltada por el cronómetro).
     Si asset_ids se informa, solo considera ese subconjunto.
+    Si no, solo la fuente de estadísticas activa.
     Devuelve True si el commit en la base de datos fue exitoso.
     """
     conn = get_conn()
     cur = conn.cursor()
+    prefijo = get_active_asset_parent().rstrip("/") + "/"
 
     try:
         if asset_ids:
@@ -66,12 +68,14 @@ def rellenar_stats_faltantes_desde_gee(asset_ids=None):
             )
         else:
             cur.execute(
-                """
+                f"""
                 SELECT a.asset_id FROM assets a
-                WHERE NOT EXISTS (
+                WHERE a.asset_id LIKE {ph()}
+                AND NOT EXISTS (
                     SELECT 1 FROM stats s WHERE s.asset_id = a.asset_id
                 )
-                """
+                """,
+                (f"{prefijo}%",),
             )
 
         pendientes = [row[0] for row in cur.fetchall()]
