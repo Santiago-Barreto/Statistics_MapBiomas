@@ -1,13 +1,11 @@
 """
-Exportación Excel con gráficas (flujo original Colab / openpyxl).
+Exportación Excel con gráficas (flujo Colab + mejoras visuales de tabla/leyenda).
 
-Una hoja por versión + gráfico general e individuales con colores MapBiomas.
 Nombre de descarga esperado: region_{id}_complete.xlsx
 """
 
 from __future__ import annotations
 
-import io
 import re
 import tempfile
 from pathlib import Path
@@ -16,6 +14,12 @@ from typing import Mapping
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.chart import LineChart, Reference
+from openpyxl.chart.marker import Marker
+from openpyxl.chart.series import SeriesLabel
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+
+from config import LEYENDA_MAPBIOMAS
 
 COLUMNAS_EXCLUIR = ["system:index", "descripcion", "version", ".geo", "geo"]
 
@@ -51,12 +55,27 @@ COLORES_ID = {
     27: "000000",
 }
 
+_HEADER_FILL = PatternFill("solid", fgColor="1F8D49")
+_HEADER_FONT = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+_CELL_FONT = Font(name="Calibri", size=10, color="333333")
+_YEAR_FONT = Font(name="Calibri", size=10, bold=True, color="1F8D49")
+_ALT_FILL = PatternFill("solid", fgColor="EAF5EE")
+_THIN = Side(style="thin", color="C5D9CC")
+_HEADER_BORDER = Border(bottom=Side(style="medium", color="0E5C2F"))
+_CELL_BORDER = Border(bottom=_THIN)
+_LEYENDA_TITLE_FONT = Font(name="Calibri", size=11, bold=True, color="1F8D49")
+_LEYENDA_FONT = Font(name="Calibri", size=10, color="333333")
+
+
+def _label_cobertura(id_val: int) -> str:
+    return LEYENDA_MAPBIOMAS.get(id_val, {}).get("label", f"ID{id_val}")
+
 
 def _id_desde_header(header) -> int | None:
     if header is None:
         return None
     s = str(header).strip()
-    m = re.match(r"^ID0*(\d+)$", s, re.IGNORECASE)
+    m = re.match(r"^ID0*(\d+)", s, re.IGNORECASE)
     if m:
         return int(m.group(1))
     if s.isdigit():
@@ -143,12 +162,80 @@ def _df_para_hoja(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _estilizar_tabla(ws) -> None:
+    """Encabezado MapBiomas, filas alternas, números legibles, sin rejilla densa."""
+    n_rows, n_cols = ws.max_row, ws.max_column
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "A2"
+    ws.row_dimensions[1].height = 22
+
+    for col in range(1, n_cols + 1):
+        cell = ws.cell(row=1, column=col)
+        cell.fill = _HEADER_FILL
+        cell.font = _HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = _HEADER_BORDER
+
+    for row in range(2, n_rows + 1):
+        for col in range(1, n_cols + 1):
+            cell = ws.cell(row=row, column=col)
+            cell.font = _YEAR_FONT if col == 1 else _CELL_FONT
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = _CELL_BORDER
+            if row % 2 == 0:
+                cell.fill = _ALT_FILL
+            cell.number_format = "0" if col == 1 else "#,##0.0"
+
+    ws.column_dimensions["A"].width = 8
+    for col in range(2, n_cols + 1):
+        letter = get_column_letter(col)
+        header = str(ws.cell(row=1, column=col).value or "")
+        ws.column_dimensions[letter].width = max(10, min(14, len(header) + 3))
+
+
+def _agregar_tabla_leyenda(ws, columnas_id: list[int]) -> None:
+    """Bloque Leyenda bajo la tabla: color + ID + nombre (legible fuera del gráfico)."""
+    start = ws.max_row + 2
+    ws.cell(row=start, column=1, value="Leyenda").font = _LEYENDA_TITLE_FONT
+
+    ws.cell(row=start + 1, column=1, value="Color").font = _HEADER_FONT
+    ws.cell(row=start + 1, column=2, value="ID").font = _HEADER_FONT
+    ws.cell(row=start + 1, column=3, value="Cobertura").font = _HEADER_FONT
+    for col in range(1, 4):
+        c = ws.cell(row=start + 1, column=col)
+        c.fill = _HEADER_FILL
+        c.alignment = Alignment(horizontal="center")
+
+    for i, col_idx in enumerate(columnas_id):
+        header = ws.cell(row=1, column=col_idx).value
+        id_val = _id_desde_header(header) or 0
+        color = COLORES_ID.get(id_val, "999999")
+        r = start + 2 + i
+        swatch = ws.cell(row=r, column=1, value="")
+        swatch.fill = PatternFill("solid", fgColor=color)
+        ws.cell(row=r, column=2, value=id_val).font = _LEYENDA_FONT
+        ws.cell(row=r, column=2).alignment = Alignment(horizontal="center")
+        ws.cell(row=r, column=3, value=_label_cobertura(id_val)).font = _LEYENDA_FONT
+        ws.column_dimensions["C"].width = max(ws.column_dimensions["C"].width or 10, 28)
+
+
 def _limpiar_formato_grafico(chart) -> None:
     chart.x_axis.delete = False
     chart.y_axis.delete = False
     chart.y_axis.majorGridlines = None
     chart.x_axis.majorGridlines = None
     chart.x_axis.tickLblSkip = 0
+
+
+def _aplicar_serie(serie, color_hex: str, titulo: str | None = None) -> None:
+    serie.graphicalProperties.line.solidFill = color_hex
+    serie.graphicalProperties.line.width = 22000
+    mk = Marker(symbol=None)
+    mk.spPr = None
+    serie.marker = mk
+    serie.smooth = False
+    if titulo:
+        serie.title = SeriesLabel(v=titulo)
 
 
 def _agregar_graficos_hoja(ws) -> None:
@@ -163,18 +250,22 @@ def _agregar_graficos_hoja(ws) -> None:
     if not columnas_id:
         return
 
-    max_row = ws.max_row
-    cats = Reference(ws, min_col=col_year, min_row=2, max_row=max_row)
+    # Estilo de tabla + leyenda legible (antes de charts: max_row de datos)
+    n_data_rows = ws.max_row
+    _estilizar_tabla(ws)
+    _agregar_tabla_leyenda(ws, columnas_id)
 
-    # 1) Gráfico general
+    cats = Reference(ws, min_col=col_year, min_row=2, max_row=n_data_rows)
+
+    # 1) Gráfico general — leyenda abajo, series con nombre de cobertura
     chart_all = LineChart()
     chart_all.title = "Evolución de Coberturas"
-    chart_all.height, chart_all.width = 8, 38
+    chart_all.height, chart_all.width = 10, 38
     if chart_all.legend is not None:
         chart_all.legend.position = "b"
 
     for col_idx in columnas_id:
-        data = Reference(ws, min_col=col_idx, min_row=1, max_row=max_row)
+        data = Reference(ws, min_col=col_idx, min_row=1, max_row=n_data_rows)
         chart_all.add_data(data, titles_from_data=True)
 
     chart_all.set_categories(cats)
@@ -185,33 +276,34 @@ def _agregar_graficos_hoja(ws) -> None:
         id_val = _id_desde_header(header) or 0
         color = COLORES_ID.get(id_val, "000000")
         if i < len(chart_all.series):
-            serie = chart_all.series[i]
-            serie.graphicalProperties.line.solidFill = color
-            serie.graphicalProperties.line.width = 20000
+            _aplicar_serie(
+                chart_all.series[i],
+                color,
+                titulo=_label_cobertura(id_val),
+            )
 
     ws.add_chart(chart_all, "H2")
 
-    # 2) Individuales
-    start_row = 20
+    # 2) Individuales — título = nombre de cobertura
+    start_row = 22
     for idx, col_idx in enumerate(columnas_id):
         header = ws.cell(row=1, column=col_idx).value
         id_val = _id_desde_header(header) or 0
         color = COLORES_ID.get(id_val, "000000")
+        titulo = _label_cobertura(id_val)
 
         c = LineChart()
-        c.title = str(header)
+        c.title = titulo
         c.height, c.width = 6, 18
         c.legend = None
 
-        d = Reference(ws, min_col=col_idx, min_row=1, max_row=max_row)
+        d = Reference(ws, min_col=col_idx, min_row=1, max_row=n_data_rows)
         c.add_data(d, titles_from_data=True)
         c.set_categories(cats)
         _limpiar_formato_grafico(c)
 
         if c.series:
-            serie = c.series[0]
-            serie.graphicalProperties.line.solidFill = color
-            serie.graphicalProperties.line.width = 20000
+            _aplicar_serie(c.series[0], color, titulo=titulo)
 
         col_pos = "H" if idx % 2 == 0 else "Z"
         row_pos = start_row + (idx // 2) * 15
@@ -221,7 +313,7 @@ def _agregar_graficos_hoja(ws) -> None:
 def generar_excel_con_graficas_desde_data_dict(
     data_dict: Mapping[str, pd.DataFrame],
 ) -> bytes:
-    """Genera un .xlsx en memoria: una hoja por entrada + gráficas (script original)."""
+    """Genera un .xlsx en memoria: una hoja por entrada + gráficas."""
     if not data_dict:
         raise ValueError("No hay datos para exportar")
 
