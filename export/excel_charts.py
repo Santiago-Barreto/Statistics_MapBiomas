@@ -32,7 +32,7 @@ from config import LEYENDA_MAPBIOMAS
 COLUMNAS_EXCLUIR = {"system:index", "descripcion", "version", ".geo", "geo"}
 
 # Subir esto invalida el Excel en session_state de Streamlit.
-ESTILO_EXCEL_VERSION = 3
+ESTILO_EXCEL_VERSION = 4
 
 _HEADER_FILL = PatternFill("solid", fgColor="1F8D49")
 _HEADER_FONT = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
@@ -151,10 +151,10 @@ def _df_limpio(df: pd.DataFrame) -> pd.DataFrame:
 def _aplicar_color_serie(serie, color_hex: str) -> None:
     serie.graphicalProperties.line.solidFill = color_hex
     serie.graphicalProperties.line.width = 25000
-    # Sin vértices: symbol=none + sin relleno en el marcador
-    mk = Marker(symbol="none")
-    mk.graphicalProperties = GraphicalProperties(noFill=True)
-    mk.graphicalProperties.line.noFill = True
+    # symbol=None → XML <symbol val="none"/>. spPr=None evita que Excel
+    # ignore el "none" y vuelva a marcadores automáticos.
+    mk = Marker(symbol=None)
+    mk.spPr = None
     serie.marker = mk
     serie.smooth = False
 
@@ -176,6 +176,7 @@ def _titulo_blanco(chart, texto: str) -> None:
 
 def _ejes_blancos(chart) -> None:
     """Etiquetas de ejes legibles sobre fondo negro."""
+
     def _rich():
         return RichText(
             p=[
@@ -190,13 +191,51 @@ def _ejes_blancos(chart) -> None:
     chart.y_axis.txPr = _rich()
 
 
+def _props_negro() -> GraphicalProperties:
+    props = GraphicalProperties(solidFill="000000")
+    props.line.noFill = True
+    props.line.prstDash = None
+    return props
+
+
 def _fondo_negro_grafico(chart) -> None:
     """Área del gráfico + plot en negro (sin estilo de tema de Excel)."""
-    chart.style = None  # evita que el tema anule el relleno
+    chart.style = None
     chart.roundedCorners = False
-    chart.graphical_properties = GraphicalProperties(solidFill="000000")
-    chart.plot_area.graphicalProperties = GraphicalProperties(solidFill="000000")
+    chart.graphical_properties = _props_negro()
+    chart.plot_area.graphicalProperties = _props_negro()
     _ejes_blancos(chart)
+
+
+def _postprocess_xlsx_charts(raw: bytes) -> bytes:
+    """
+    Ajuste fino del XML de charts: Excel a veces ignora marcadores/fondo
+    si el spPr del marker viene sucio; también quita majorGridlines.
+    """
+    import re
+    import zipfile
+
+    src = zipfile.ZipFile(io.BytesIO(raw), "r")
+    out_buf = io.BytesIO()
+    with zipfile.ZipFile(out_buf, "w", compression=zipfile.ZIP_DEFLATED) as dst:
+        for info in src.infolist():
+            data = src.read(info.filename)
+            if info.filename.startswith("xl/charts/chart") and info.filename.endswith(".xml"):
+                xml = data.decode("utf-8")
+                # Marcadores limpios: solo symbol=none
+                xml = re.sub(
+                    r"<marker>.*?</marker>",
+                    "<marker><symbol val=\"none\"/></marker>",
+                    xml,
+                    flags=re.DOTALL,
+                )
+                # Sin rejilla horizontal del eje
+                xml = xml.replace("<majorGridlines/>", "")
+                xml = xml.replace("<majorGridlines />", "")
+                data = xml.encode("utf-8")
+            dst.writestr(info, data)
+    src.close()
+    return out_buf.getvalue()
 
 
 def _estilizar_tabla(ws, n_rows: int, n_cols: int) -> None:
@@ -336,7 +375,7 @@ def generar_excel_con_graficas_desde_data_dict(
 
     out = io.BytesIO()
     wb.save(out)
-    return out.getvalue()
+    return _postprocess_xlsx_charts(out.getvalue())
 
 
 def generar_excel_con_graficas_desde_region_xlsx(ruta_o_bytes) -> bytes:

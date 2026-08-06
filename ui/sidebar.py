@@ -161,12 +161,15 @@ def _render_exportar_version_final(region_id, version_sel):
                 payload = _excel_mod.generar_excel_con_graficas_desde_data_dict(data_dict)
                 st.session_state["excel_final"] = {
                     "bytes": payload,
-                    "name": f"region_{region_id}_complete.xlsx",
+                    "name": f"region_{region_id}_complete_estilo{estilo_ver}.xlsx",
                     "n": len(data_dict),
                     "sig": tuple(sorted(version_sel)),
                     "estilo": estilo_ver,
                 }
-                st.success("Excel listo — pulsa Descargar (archivo nuevo).")
+                st.success(
+                    f"Excel listo (estilo {estilo_ver}): fondo negro, sin vértices. "
+                    "Cierra el Excel anterior y descarga este archivo nuevo."
+                )
 
     excel = st.session_state.get("excel_final")
     # Invalidar si cambió selección o versión de estilo del Excel.
