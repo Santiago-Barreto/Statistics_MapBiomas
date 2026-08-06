@@ -106,22 +106,65 @@ def render_sidebar():
                                 version_sel.append(item)
             
             st.divider()
-            modo_vista = st.radio("Visualización", ["Dashboard Completo", "Solo Gráficas", "Comparativa Combinada"])
-            
+            modo_vista = st.radio(
+                "Visualización",
+                ["Dashboard Completo", "Solo Gráficas", "Comparativa Combinada"],
+            )
+
+            if scope == "region":
+                _render_exportar_version_final(region_id, version_sel)
+
             st.divider()
 
             st.subheader("Comparación en GEE")
-            st.info("Compara los resultados de la Colección 4 frente a la Colección 3 en el visor oficial (También puedes ver los limites entre regiones y biomas ;D)")
-            
+            st.info(
+                "Compara los resultados de la Colección 4 frente a la Colección 3 en el visor oficial "
+                "(También puedes ver los limites entre regiones y biomas ;D)"
+            )
+
             st.link_button(
                 "🔍 Visor Comparativo C3 vs C4",
                 "https://mapbiomas-andesnorte.users.earthengine.app/view/coleccion4",
-                width='content',
-                help="Accede a la App de GEE para validación cruzada entre colecciones."
+                width="content",
+                help="Accede a la App de GEE para validación cruzada entre colecciones.",
             )
         st.divider()
 
-
-        
-
     return region_id, version_sel, modo_vista, modo, scope, bioma_sel
+
+
+def _render_exportar_version_final(region_id, version_sel):
+    """Botón bajo Visualización: Excel con gráficas desde las versiones seleccionadas."""
+    st.caption("Una hoja por versión seleccionada + gráficas MapBiomas.")
+    disabled = not version_sel
+    if st.button(
+        "📥 Exportar versión final",
+        use_container_width=True,
+        disabled=disabled,
+        help="Requiere marcar al menos una versión arriba.",
+    ):
+        from data.processing import cargar_datos_totales
+        from export.excel_charts import generar_excel_con_graficas_desde_data_dict
+
+        with st.spinner("Generando Excel…"):
+            data_dict = cargar_datos_totales(version_sel)
+            if not data_dict:
+                st.error("No hay estadísticas en la BD para esas versiones. Sincroniza primero.")
+            else:
+                payload = generar_excel_con_graficas_desde_data_dict(data_dict)
+                st.session_state["excel_final"] = {
+                    "bytes": payload,
+                    "name": f"R{region_id}.xlsx",
+                    "n": len(data_dict),
+                }
+
+    excel = st.session_state.get("excel_final")
+    if excel:
+        st.download_button(
+            label=f"⬇️ Descargar {excel['name']} ({excel['n']} hojas)",
+            data=excel["bytes"],
+            file_name=excel["name"],
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="dl_excel_final",
+        )
