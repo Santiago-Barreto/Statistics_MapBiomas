@@ -37,3 +37,4 @@ data/*.sqlite
 migracion_gee_log.txt
 region_*_complete.xlsx
 col_*.xlsx
+exports/
