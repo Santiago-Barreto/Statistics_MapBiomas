@@ -4,6 +4,8 @@ Contiene las rutas de los assets de Google Earth Engine y los parámetros
 visuales estándar para la clasificación LULC.
 """
 
+from pathlib import Path
+
 ASSET_PARENT = "projects/mapbiomas-colombia/assets/LULC/COLECCION4/ESTADISTICAS/"
 ASSET_REGIONES = "projects/mapbiomas-colombia/assets/DATOS_AUXILIARES/VECTORES/col-clasificacion-regiones-c3"
 
@@ -54,3 +56,11 @@ for id_clase, info in LEYENDA_MAPBIOMAS.items():
 MODOS_APP = {
     "🎯 Coberturas": "coberturas",
 }
+
+# Avance Col. 4: Asset Final para modo «Bioma completo»
+AVANCE_COLOMBIA_XLSX = (
+    Path(__file__).resolve().parent
+    / "COLOMBIA_COL_4_Formatos de avance detallado Colombia.xlsx"
+)
+AVANCE_SHEET_MAPA_GENERAL = "MAPA GENERAL COLOMBIA"
+AVANCE_COL_ASSET_FINAL = "CJ"  # encabezado «Asset final»

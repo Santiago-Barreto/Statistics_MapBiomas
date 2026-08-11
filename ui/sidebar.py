@@ -8,12 +8,10 @@ from gee.assets import (
     obtener_biomas,
     regiones_por_bioma,
     listar_versiones_disponibles,
-    listar_assets_por_bioma,
 )
 from ui.formatters import (
     formatear_nombre_humano,
     categorizar_versiones,
-    seleccionar_assets_base_ultima_version_efectiva,
 )
 from config import MODOS_APP
 
@@ -71,26 +69,56 @@ def render_sidebar():
                 versiones_raw = listar_versiones_disponibles(region_id)
             else:
                 region_id = "BIOMA"
-                versiones_raw = listar_assets_por_bioma(bioma_sel)
+                versiones_raw = []
 
-            if not versiones_raw:
+            if scope == "region" and not versiones_raw:
                 st.warning("No hay assets disponibles para la selección.")
                 st.stop()
 
             if scope == "bioma":
-                version_sel = seleccionar_assets_base_ultima_version_efectiva(versiones_raw)
-                if not version_sel:
-                    st.warning(
-                        "No se encontraron mapas base de estadísticas (R{id}_V{versión} sin proceso) para este bioma."
-                    )
-                    st.stop()
+                from data.asset_final import resolver_assets_bioma_desde_avance
+
+                resolucion = resolver_assets_bioma_desde_avance(bioma_sel)
+                version_sel = resolucion.asset_ids
+
                 st.subheader("Mapas incluidos (bioma)")
                 st.caption(
-                    "Última versión efectiva **por región** (sin sufijos). "
-                    "La etiqueta **V11** no se usa como última cuando existen otras versiones base."
+                    "Versiones según **Asset Final** "
+                    "(hoja MAPA GENERAL COLOMBIA · columna CJ del avance Col. 4)."
                 )
-                st.success(f"Incluye **{len(version_sel)}** regiones ({len(version_sel)} assets base).")
-                with st.expander("Lista de assets (último base por región)"):
+
+                if resolucion.faltantes and not version_sel and "No se encontró" in (
+                    resolucion.faltantes[0] if resolucion.faltantes else ""
+                ):
+                    st.error(resolucion.faltantes[0])
+                    st.stop()
+
+                if not version_sel:
+                    st.warning(
+                        f"Ningún Asset Final del bioma **{bioma_sel}** está en la BD. "
+                        "Sincroniza estadísticas o revisa el Excel de avance."
+                    )
+                    st.stop()
+
+                st.success(
+                    f"Incluye **{len(version_sel)}** regiones "
+                    f"(Asset Final cruzado con la BD)."
+                )
+                if resolucion.faltantes:
+                    with st.expander(
+                        f"⚠️ {len(resolucion.faltantes)} Asset Final sin estadísticas en BD"
+                    ):
+                        st.caption("Se omiten del análisis; no detienen la vista.")
+                        for lab in resolucion.faltantes:
+                            st.text(lab)
+                if resolucion.invalidos:
+                    with st.expander(
+                        f"ℹ️ {len(resolucion.invalidos)} valores inválidos en columna CJ"
+                    ):
+                        for lab in resolucion.invalidos:
+                            st.text(lab)
+
+                with st.expander("Lista de assets (Asset Final → estadísticas)"):
                     for aid in sorted(version_sel, key=lambda x: x.split("/")[-1]):
                         st.text(aid.split("/")[-1])
             else:
