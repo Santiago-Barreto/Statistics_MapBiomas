@@ -114,15 +114,6 @@ def render_graphs_only_view(data_dict, region_id):
             plot_temporal_series(df, region_id, chart_key=f"plot_grid_{region_id}_{v}")
             st.divider()
 
-def render_biome_view(data_dict, biome):
-    """Renderiza solo los gráficos en cuadrícula de 2 columnas."""
-    cols_g = st.columns(2)
-    for i, (v, df) in enumerate(data_dict.items()):
-        with cols_g[i % 2]:
-            st.markdown(f"#### 📈 Versión {v}")
-            plot_temporal_series(df, biome, chart_key=f"plot_biome_{biome}_{v}")
-            st.divider()
-
 
 def _label_clase(class_id):
     """Convierte IDs técnicos (ID03) en etiquetas legibles de cobertura."""

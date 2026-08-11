@@ -3,28 +3,37 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
-.venv
+.venv/
 venv/
 env/
 
 # --- STREAMLIT ---
 .streamlit/config.toml
 .streamlit/secrets.toml
+.streamlit/*.bak
 
 # --- ENVIRONMENT & SECRETS ---
 .env
 .flaskenv
 *.secret
-*.json
+# Credenciales GEE / GCP locales (no versionar)
+*-service-account*.json
+credentials*.json
 
 # --- OS / IDE ---
 .vscode/
 .idea/
-.DS_Storegit add .gitignore
+.DS_Store
 Thumbs.db
 
-# Datos/Caché
+# --- CACHÉ / DATOS LOCALES ---
 .cache/
-
 data/*.db
 data/*.sqlite
+
+# --- ARTEFACTOS LOCALES (exports, logs, dumps) ---
+*.bak
+*_log.txt
+migracion_gee_log.txt
+region_*_complete.xlsx
+col_*.xlsx

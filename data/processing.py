@@ -159,34 +159,6 @@ def cargar_aportes_regionales_bioma(asset_ids):
     return df_raw[["region", "year", "class_id", "area_ha"]]
 
 
-def construir_dataframe(raw_data, version):
-    """
-    Transforma una lista de diccionarios con metadatos de GEE en un 
-    DataFrame de Pandas con limpieza de columnas de sistema y normalización 
-    de identificadores de clase.
-    """
-    if not raw_data:
-        return None
-        
-    df = pd.DataFrame(raw_data)
-
-    cols_drop = {'system:index', 'geo'}
-    df = df.drop(columns=[c for c in cols_drop if c in df.columns])
-
-    nuevas_columnas = {
-        col: col.split('_', 1)[0]
-        for col in df.columns
-        if col not in ['year', 'version']
-    }
-
-    df = df.rename(columns=nuevas_columnas)
-
-    df['year'] = df['year'].astype('int16')
-    df['version'] = version
-
-    return df
-
-
 def fusionar_versiones(dfs):
     """
     Realiza la concatenación de múltiples estructuras DataFrame en una única 

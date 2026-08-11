@@ -18,16 +18,6 @@ from gee.deletion import (
     expandir_assets_para_eliminar,
 )
 
-def obtener_assets_totales():
-    """
-    Obtiene la lista completa de IDs de assets desde las carpetas de GEE.
-    """
-    try:
-        assets = ee.data.listAssets({'parent': ASSET_PARENT}).get('assets', [])
-        return [a['id'] for a in assets]
-    except Exception as e:
-        st.error(f"Error al consultar GEE: {str(e)}")
-        return []
 
 def eliminar_assets_seleccionados(lista_ids):
     """
