@@ -44,3 +44,38 @@ def test_filas_a_stats_rows():
     )
     assert ("projects/x/R1_V1", 2020, "ID03", 10.5) in rows
     assert ("projects/x/R1_V1", 2020, "ID21", 1.0) in rows
+
+
+def test_purgar_stats_locales_region_version(tmp_path, monkeypatch):
+    import sqlite3
+
+    from config import ASSET_PARENT
+    from scripts import calcular_estadisticas_local as mod
+    from tests.conftest import _bootstrap_schema
+
+    db_path = str(tmp_path / "purge_rv.db")
+    monkeypatch.setattr("data.db.DB_PATH", db_path)
+    conn = sqlite3.connect(db_path)
+    _bootstrap_schema(conn)
+    parent = ASSET_PARENT.rstrip("/")
+    conn.executemany(
+        "INSERT INTO assets VALUES (?,?,?,?,?)",
+        [
+            (f"{parent}/R30484_V7-filtro-espacial", "30484", "Andes", "a", 1),
+            (f"{parent}/R30484_V7-old-desc", "30484", "Andes", "b", 1),
+            (f"{parent}/R30484_V8-MapaGeneral", "30484", "Andes", "c", 1),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO stats VALUES (?,?,?,?)",
+        (f"{parent}/R30484_V7-filtro-espacial", 2020, "ID03", 1.0),
+    )
+    conn.commit()
+    conn.close()
+
+    n = mod.purgar_stats_locales_region_version(30484, 7)
+    assert n == 2
+    conn = sqlite3.connect(db_path)
+    left = [r[0] for r in conn.execute("SELECT asset_id FROM assets").fetchall()]
+    conn.close()
+    assert left == [f"{parent}/R30484_V8-MapaGeneral"]

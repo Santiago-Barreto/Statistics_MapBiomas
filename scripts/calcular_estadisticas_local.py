@@ -2,18 +2,24 @@
 """
 Cálculo LOCAL de estadísticas Col. 4 (equivalente al tool JS de EXPORT-STATS).
 
-- Lee clasificación V1 desde clasificacion / Vx desde clasificacion-ft
-- Calcula área (ha) por clase y año en GEE (reduceRegion)
-- Escribe resultados en SQLite local (y CSV opcional)
-- NO hace Export.table.toAsset ni deja copias en otros proyectos GEE
+IMPORTANTE — recálculo forzado:
+  Aunque la BD local ya tenga R30484_V7-…, la clasificación GEE
+  COLOMBIA-30484-7 puede haber cambiado. Por defecto SIEMPRE se vuelve a
+  calcular desde la imagen actual y se reemplazan las stats locales de esa
+  región+versión (se borran hojas/IDs previos R{reg}_V{ver}* bajo ESTADISTICAS).
+
+- V1 → clasificacion / Vx → clasificacion-ft
+- Escribe en SQLite local (y CSV opcional)
+- NO hace Export.table.toAsset
 
 Uso (rama local; no pensado para main/Cloud):
 
     python scripts/calcular_estadisticas_local.py --region 30477 --versions 12
+    python scripts/calcular_estadisticas_local.py --desde-asset-final
     python scripts/calcular_estadisticas_local.py --desde-asset-final --dry-run
-    python scripts/calcular_estadisticas_local.py --desde-asset-final --solo-faltantes
 
-Requiere: earthengine authenticate y permisos de lectura en clasificación.
+    # Solo si quieres SALTAR las que ya están (no recomendado si el mapa pudo cambiar):
+    python scripts/calcular_estadisticas_local.py --desde-asset-final --solo-faltantes
 """
 
 from __future__ import annotations
@@ -252,6 +258,50 @@ def existe_stats_en_db(asset_id: str) -> bool:
         conn.close()
 
 
+def purgar_stats_locales_region_version(region_id: int | str, version: int) -> int:
+    """
+    Borra de SQLite cualquier asset/stats local de esa región+versión bajo
+    ASSET_PARENT (incluye sufijos viejos si cambió la descripción del mapa).
+    """
+    prefijo = ASSET_PARENT.rstrip("/") + "/"
+    patrones = [
+        f"{prefijo}R{region_id}_V{int(version)}%",
+        f"{prefijo}R{region_id}-V{int(version)}%",
+    ]
+
+    def _borrar():
+        from data.db import ph_join
+
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            ids: list[str] = []
+            for pat in patrones:
+                cur.execute(
+                    f"SELECT asset_id FROM assets WHERE asset_id LIKE {ph()}",
+                    (pat,),
+                )
+                ids.extend(r[0] for r in cur.fetchall())
+            ids = list(dict.fromkeys(ids))
+            if not ids:
+                return 0
+            phs = ph_join(len(ids))
+            cur.execute(f"DELETE FROM stats WHERE asset_id IN ({phs})", ids)
+            cur.execute(f"DELETE FROM assets WHERE asset_id IN ({phs})", ids)
+            conn.commit()
+            return len(ids)
+        except DB_OPERATIONAL_ERRORS:
+            conn.rollback()
+            return -1
+        finally:
+            conn.close()
+
+    try:
+        return int(with_sqlite_retry(_borrar))
+    except DB_OPERATIONAL_ERRORS:
+        return -1
+
+
 def procesar_uno(
     region_id: int | str,
     version: int,
@@ -286,12 +336,18 @@ def procesar_uno(
 
     try:
         geo = geometria_region(region_id, regions_asset)
-        # fuerza evaluación temprana de geometría
         _ = geo.area(maxError=100).getInfo()
     except Exception as exc:
         return False, f"Región no encontrada / geometría ({exc})"
 
-    print(f"  calculando {years.start}–{years.stop - 1} (scale={scale})…")
+    # Aunque la BD “crea” tener V7, el mapa GEE pudo cambiar: purgar y recalcular.
+    n_old = purgar_stats_locales_region_version(region_id, version)
+    if n_old > 0:
+        print(f"  · purgadas {n_old} entradas locales previas de R{region_id}_V{version}*")
+    print(
+        f"  RECALCULANDO desde clasificación actual "
+        f"({years.start}–{years.stop - 1}, scale={scale})…"
+    )
     t0 = time.time()
     filas = calcular_stats_por_anio(image, geo, years, scale=scale)
     filas = normalizar_columnas(filas)
@@ -317,7 +373,7 @@ def procesar_uno(
         )
         print(f"  CSV → {out}")
 
-    print("  OK → SQLite")
+    print("  OK → SQLite (stats actualizadas)")
     return True, "ok"
 
 
@@ -365,7 +421,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--solo-faltantes",
         action="store_true",
-        help="Salta si ya hay filas en stats para ese asset local",
+        help=(
+            "NO recomendado si el mapa pudo cambiar: omite región+versión "
+            "que ya tengan filas en stats. Por defecto SIEMPRE se recalcula."
+        ),
     )
     p.add_argument(
         "--csv-dir",
