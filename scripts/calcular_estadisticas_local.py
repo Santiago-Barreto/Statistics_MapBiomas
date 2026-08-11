@@ -1,32 +1,27 @@
 #!/usr/bin/env python3
 """
-Cálculo LOCAL de estadísticas Col. 4 (equivalente al tool JS de EXPORT-STATS).
+Cálculo de estadísticas Col. 4 — mismo flujo que el tool JS EXPORT-STATS.
 
-IMPORTANTE — recálculo forzado:
-  Aunque la BD local ya tenga R30484_V7-…, la clasificación GEE
-  COLOMBIA-30484-7 puede haber cambiado. Por defecto SIEMPRE se vuelve a
-  calcular desde la imagen actual y se reemplazan las stats locales de esa
-  región+versión (se borran hojas/IDs previos R{reg}_V{ver}* bajo ESTADISTICAS).
+NO usa getInfo() para el reduceRegion (eso se cuelga). Hace:
 
-- V1 → clasificacion / Vx → clasificacion-ft
-- Escribe en SQLite local (y CSV opcional)
-- NO hace Export.table.toAsset
+  1) FeatureCollection server-side (calculateStats + ceros), igual que el JS
+  2) ee.batch.Export.table.toAsset → ESTADISTICAS (tarea async en GEE)
+  3) Espera la tarea
+  4) Lee el asset y lo vuelca a SQLite local
 
-Uso (rama local; no pensado para main/Cloud):
+Uso (rama local):
 
     python scripts/calcular_estadisticas_local.py --region 30477 --versions 12
     python scripts/calcular_estadisticas_local.py --desde-asset-final
     python scripts/calcular_estadisticas_local.py --desde-asset-final --dry-run
 
-    # Solo si quieres SALTAR las que ya están (no recomendado si el mapa pudo cambiar):
-    python scripts/calcular_estadisticas_local.py --desde-asset-final --solo-faltantes
+    # Solo lanza Exports (como el Code Editor) y no espera / no escribe SQLite:
+    python scripts/calcular_estadisticas_local.py --desde-asset-final --solo-lanzar
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
-import re
 import sys
 import time
 from pathlib import Path
@@ -44,7 +39,7 @@ from config import (  # noqa: E402
     BASE_PATH_V1,
     BASE_PATH_VX,
 )
-from data.asset_final import parse_asset_final, leer_asset_final_desde_xlsx  # noqa: E402
+from data.asset_final import leer_asset_final_desde_xlsx, parse_asset_final  # noqa: E402
 from data.db import (  # noqa: E402
     DB_OPERATIONAL_ERRORS,
     get_conn,
@@ -54,9 +49,10 @@ from data.db import (  # noqa: E402
     with_sqlite_retry,
 )
 from data.year_norm import normalize_year  # noqa: E402
+from gee.assets import leer_stats_procesadas  # noqa: E402
+from sync.manager import _construir_rows_stats  # noqa: E402
 
-REINTENTOS = 3
-PAUSA_SEG = 0.5
+PAUSA_POLL_SEG = 20
 
 
 def inicializar_ee(project: str | None = None) -> None:
@@ -72,278 +68,145 @@ def inicializar_ee(project: str | None = None) -> None:
 
 
 def ruta_clasificacion(region_id: int | str, version: int) -> str:
-    """V1 → clasificacion; V>1 → clasificacion-ft (como el script JS)."""
     base = BASE_PATH_V1 if int(version) == 1 else BASE_PATH_VX
     return f"{base.rstrip('/')}/COLOMBIA-{region_id}-{int(version)}"
 
 
-def asset_id_stats_local(region_id: int | str, version: int, descripcion: str) -> str:
-    """Misma nomenclatura que toAsset del JS, solo como ID local en SQLite."""
-    desc = (
-        str(descripcion or "sin-descripcion")
-        .strip()
-        .replace(" ", "-")
-        .replace("+", "")
-    )
-    leaf = f"R{region_id}_V{int(version)}-{desc}" if desc else f"R{region_id}_V{int(version)}"
+def normalizar_descripcion(desc: str) -> str:
+    return str(desc or "sin-descripcion").strip().replace(" ", "-").replace("+", "")
+
+
+def asset_id_stats(region_id: int | str, version: int, descripcion: str) -> str:
+    """Igual que assetId del Export.toAsset del JS."""
+    leaf = f"R{region_id}_V{int(version)}-{normalizar_descripcion(descripcion)}"
     return f"{ASSET_PARENT.rstrip('/')}/{leaf}"
 
 
-def geometria_region(region_id: int | str, regions_asset: str) -> ee.Geometry:
-    fc = ee.FeatureCollection(regions_asset).filter(
+def region_feature(region_id: int | str, regions_asset: str) -> ee.FeatureCollection:
+    return ee.FeatureCollection(regions_asset).filter(
         ee.Filter.eq("id_regionC", int(region_id))
     )
-    return fc.geometry()
 
 
-def _id_columna(class_id: int) -> str:
-    return f"ID{class_id:02d}" if class_id < 100 else f"ID{class_id}"
-
-
-def _groups_a_fila(year: int, groups) -> dict | None:
-    if not groups:
-        return None
-    fila: dict = {"year": int(year)}
-    for item in groups:
-        try:
-            cid = int(item["class"])
-            area = float(item["sum"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        fila[_id_columna(cid)] = area
-    return fila if len(fila) > 1 else None
-
-
-def _fc_stats_server(
+def calculate_stats(
     image: ee.Image,
     region_geo: ee.Geometry,
-    years: list[int],
-    scale: int,
+    version_val: int,
+    version_desc: ee.ComputedObject,
+    year_min: int,
+    year_max: int,
+    scale: int = 30,
 ) -> ee.FeatureCollection:
-    """Misma idea que calculateStats del JS: reduceRegion en el servidor por año."""
-    years_ee = ee.List([int(y) for y in years])
+    """
+    Réplica de calculateStats del JS (reduceRegion + IDxx planos).
+    No se evalúa aquí: solo se construye el grafo para Export.
+    """
+    years_process = ee.List.sequence(year_min, year_max)
     img = image
     geo = region_geo
-    sc = ee.Number(int(scale))
+    ver = ee.Number(int(version_val))
+    desc = version_desc
+    sc = int(scale)
 
     def _por_anio(y):
-        y = ee.Number(y)
-        band = ee.String("classification_").cat(y.format("%d"))
-        img_year = img.select([band]).int16().selfMask()
-        area_img = ee.Image.pixelArea().divide(1e4).addBands(img_year)
-        result = area_img.reduceRegion(
-            reducer=ee.Reducer.sum().group(groupField=1, groupName="class"),
-            geometry=geo,
-            scale=sc,
-            maxPixels=1e13,
-            bestEffort=True,
-            tileScale=4,
-        )
-        feat = ee.Feature(
-            ee.Geometry.Point([0, 0]),
-            ee.Dictionary(result).set("year", y),
-        )
-        return ee.Algorithms.If(img.bandNames().contains(band), feat, None)
+        year = ee.Number(y).format("%d")
+        band_name = ee.String("classification_").cat(year)
 
-    return ee.FeatureCollection(years_ee.map(_por_anio, True))
+        def _calc():
+            img_year = img.select([band_name]).int16().selfMask()
+            area_img = ee.Image.pixelArea().divide(1e4).addBands(img_year)
+            groups = area_img.reduceRegion(
+                reducer=ee.Reducer.sum().group(groupField=1, groupName="class"),
+                geometry=geo,
+                scale=sc,
+                maxPixels=1e13,
+            ).get("groups")
+            groups_list = ee.List(groups)
+            base_dict = ee.Dictionary(
+                {
+                    "year": year,
+                    "version": ver,
+                    "descripcion": desc,
+                }
+            )
 
-
-def _fc_a_filas(fc_info: dict) -> list[dict]:
-    filas: list[dict] = []
-    for feat in fc_info.get("features") or []:
-        props = feat.get("properties") or {}
-        year = normalize_year(props.get("year"))
-        if year is None:
-            continue
-        groups = props.get("groups")
-        if groups is not None:
-            fila = _groups_a_fila(int(year), groups)
-            if fila:
-                filas.append(fila)
-            continue
-        fila = {"year": int(year)}
-        for k, v in props.items():
-            if k in ("year", "groups", "system:index", "version", "descripcion"):
-                continue
-            if str(k).upper().startswith("ID"):
-                try:
-                    fila[str(k)] = float(v)
-                except (TypeError, ValueError):
-                    continue
-        if len(fila) > 1:
-            filas.append(fila)
-    return filas
-
-
-def calcular_stats_por_anio(
-    image: ee.Image,
-    region_geo: ee.Geometry,
-    years: range,
-    scale: int = 30,
-    anios_por_lote: int = 10,
-) -> list[dict]:
-    """
-    Calcula áreas en GEE por lotes (default 10 años / 1 getInfo).
-
-    El modo anterior (1 getInfo por año) era demasiado lento frente al Export del JS.
-    """
-    years_list = [int(y) for y in years]
-    if not years_list:
-        return []
-
-    lote = len(years_list) if anios_por_lote <= 0 else max(1, int(anios_por_lote))
-    filas: list[dict] = []
-
-    for i in range(0, len(years_list), lote):
-        chunk = years_list[i : i + lote]
-        print(
-            f"  · lote {chunk[0]}–{chunk[-1]} ({len(chunk)} años, 1 llamada GEE)…",
-            flush=True,
-        )
-        fc = _fc_stats_server(image, region_geo, chunk, scale)
-        info = None
-        for intento in range(REINTENTOS):
-            try:
-                t0 = time.time()
-                info = fc.getInfo()
-                print(f"    listo en {time.time() - t0:.1f}s", flush=True)
-                break
-            except Exception as exc:
-                print(
-                    f"    intento {intento + 1}/{REINTENTOS} falló: {exc}",
-                    flush=True,
+            def _iter(item, memo):
+                item = ee.Dictionary(item)
+                class_id = ee.Number(item.get("class")).toInt()
+                area = item.get("sum")
+                class_str = ee.String(class_id)
+                col_name = ee.Algorithms.If(
+                    class_id.lt(10),
+                    ee.String("ID0").cat(class_str),
+                    ee.String("ID").cat(class_str),
                 )
-                if intento == REINTENTOS - 1 and len(chunk) > 1:
-                    mitad = max(1, len(chunk) // 2)
-                    print(
-                        f"    · reintentando en sub-lotes de {mitad}…",
-                        flush=True,
-                    )
-                    filas.extend(
-                        calcular_stats_por_anio(
-                            image,
-                            region_geo,
-                            range(chunk[0], chunk[-1] + 1),
-                            scale=scale,
-                            anios_por_lote=mitad,
-                        )
-                    )
-                    info = None
-                else:
-                    time.sleep(PAUSA_SEG * (intento + 1) * 2)
+                return ee.Dictionary(memo).set(col_name, area)
 
-        if info is not None:
-            filas.extend(_fc_a_filas(info))
+            class_dict = groups_list.iterate(_iter, base_dict)
+            return ee.Feature(ee.Geometry.Point([0, 0]), class_dict)
 
-    return filas
+        return ee.Algorithms.If(img.bandNames().contains(band_name), _calc(), None)
+
+    return ee.FeatureCollection(years_process.map(_por_anio, True))
 
 
-def normalizar_columnas(filas: list[dict]) -> list[dict]:
-    """Rellena con 0 las clases ausentes en algún año (como el JS)."""
-    keys: set[str] = set()
-    for f in filas:
-        keys.update(k for k in f if k != "year")
-    out = []
-    for f in filas:
-        full = {k: 0.0 for k in keys}
-        full.update(f)
-        full["year"] = int(f["year"])
-        out.append(full)
-    return out
+def normalizar_fc_ceros(fc_raw: ee.FeatureCollection) -> ee.FeatureCollection:
+    """Relleno de ceros por columna (pasos 4.3 A–C del JS)."""
+    all_keys = (
+        fc_raw.map(lambda f: f.set("keys_list", f.propertyNames()))
+        .aggregate_array("keys_list")
+        .flatten()
+        .distinct()
+        .removeAll(["year", "version", "descripcion", "system:index"])
+    )
+    zero_list = ee.List.repeat(0, all_keys.length())
+    zero_dict = ee.Dictionary.fromLists(all_keys, zero_list)
+
+    def _fill(f):
+        full = zero_dict.combine(f.toDictionary(), True)
+        return ee.Feature(ee.Geometry.Point([0, 0]), full)
+
+    return fc_raw.map(_fill)
 
 
-def filas_a_stats_rows(asset_id: str, filas: list[dict]) -> list[tuple]:
-    rows = []
-    for f in filas:
-        year = normalize_year(f.get("year"))
-        if year is None:
-            continue
-        for k, v in f.items():
-            if k == "year":
-                continue
-            class_id = str(k).split("_")[0]
-            try:
-                rows.append((asset_id, int(year), class_id, float(v)))
-            except (TypeError, ValueError):
-                continue
-    return rows
+def borrar_asset_si_existe(asset_id: str) -> None:
+    try:
+        ee.data.deleteAsset(asset_id)
+        print(f"  · asset GEE previo borrado: {asset_id.rsplit('/', 1)[-1]}", flush=True)
+    except Exception:
+        pass
+
+
+def esperar_tarea(task: ee.batch.Task, etiqueta: str) -> bool:
+    """Espera Export async (como Tasks del Code Editor)."""
+    print(f"  · tarea GEE iniciada [{etiqueta}] id={task.id}", flush=True)
+    while True:
+        status = task.status()
+        state = status.get("state")
+        if state == "COMPLETED":
+            print(f"  · COMPLETED [{etiqueta}]", flush=True)
+            return True
+        if state in ("FAILED", "CANCELLED"):
+            print(
+                f"  · {state} [{etiqueta}]: {status.get('error_message')}",
+                flush=True,
+            )
+            return False
+        print(f"  · {state}… esperando {PAUSA_POLL_SEG}s", flush=True)
+        time.sleep(PAUSA_POLL_SEG)
 
 
 def bioma_de_region(region_id: int | str, regions_asset: str) -> str:
     try:
         props = (
-            ee.FeatureCollection(regions_asset)
-            .filter(ee.Filter.eq("id_regionC", int(region_id)))
-            .first()
-            .getInfo()
-        )
-        if props and props.get("properties"):
-            return str(props["properties"].get("bioma") or "Sin Bioma")
+            region_feature(region_id, regions_asset).first().getInfo() or {}
+        ).get("properties") or {}
+        return str(props.get("bioma") or "Sin Bioma")
     except Exception:
-        pass
-    return "Sin Bioma"
-
-
-def escribir_sqlite(asset_id: str, region_id: str, bioma: str, filas: list[dict]) -> bool:
-    label = asset_id.rsplit("/", 1)[-1]
-    ahora = int(time.time())
-    stats_rows = filas_a_stats_rows(asset_id, filas)
-
-    def _write():
-        conn = get_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                insert_assets_upsert_sql(),
-                (asset_id, str(region_id), bioma, label, ahora),
-            )
-            cur.execute(f"DELETE FROM stats WHERE asset_id = {ph()}", (asset_id,))
-            if stats_rows:
-                cur.executemany(insert_stats_upsert_sql(), stats_rows)
-            conn.commit()
-            return True
-        except DB_OPERATIONAL_ERRORS:
-            conn.rollback()
-            return False
-        finally:
-            conn.close()
-
-    try:
-        return bool(with_sqlite_retry(_write))
-    except DB_OPERATIONAL_ERRORS:
-        return False
-
-
-def escribir_csv(path: Path, filas: list[dict], meta: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    keys = ["year"] + sorted(k for k in filas[0] if k != "year") if filas else ["year"]
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=keys + ["version", "descripcion", "region_id"])
-        w.writeheader()
-        for f in filas:
-            row = dict(f)
-            row.update(meta)
-            w.writerow(row)
-
-
-def existe_stats_en_db(asset_id: str) -> bool:
-    conn = get_conn()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT 1 FROM stats WHERE asset_id = {ph()} LIMIT 1",
-            (asset_id,),
-        )
-        return cur.fetchone() is not None
-    finally:
-        conn.close()
+        return "Sin Bioma"
 
 
 def purgar_stats_locales_region_version(region_id: int | str, version: int) -> int:
-    """
-    Borra de SQLite cualquier asset/stats local de esa región+versión bajo
-    ASSET_PARENT (incluye sufijos viejos si cambió la descripción del mapa).
-    """
     prefijo = ASSET_PARENT.rstrip("/") + "/"
     patrones = [
         f"{prefijo}R{region_id}_V{int(version)}%",
@@ -383,81 +246,128 @@ def purgar_stats_locales_region_version(region_id: int | str, version: int) -> i
         return -1
 
 
+def escribir_sqlite_desde_gee_asset(
+    asset_id: str, region_id: str, bioma: str
+) -> tuple[bool, int]:
+    raw = leer_stats_procesadas(asset_id)
+    if not raw:
+        return False, 0
+    rows = _construir_rows_stats(asset_id, raw)
+    label = asset_id.rsplit("/", 1)[-1]
+    ahora = int(time.time())
+
+    def _write():
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                insert_assets_upsert_sql(),
+                (asset_id, str(region_id), bioma, label, ahora),
+            )
+            cur.execute(f"DELETE FROM stats WHERE asset_id = {ph()}", (asset_id,))
+            if rows:
+                cur.executemany(insert_stats_upsert_sql(), rows)
+            conn.commit()
+            return True
+        except DB_OPERATIONAL_ERRORS:
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
+    try:
+        ok = bool(with_sqlite_retry(_write))
+    except DB_OPERATIONAL_ERRORS:
+        return False, 0
+    return ok, len(rows)
+
+
+def lanzar_export(
+    fc: ee.FeatureCollection,
+    description: str,
+    asset_id: str,
+) -> ee.batch.Task:
+    """Igual que Export.table.toAsset del JS."""
+    task = ee.batch.Export.table.toAsset(
+        collection=fc,
+        description=description[:100],
+        assetId=asset_id,
+    )
+    task.start()
+    return task
+
+
 def procesar_uno(
     region_id: int | str,
     version: int,
     *,
-    years: range,
+    year_min: int,
+    year_max: int,
     regions_asset: str,
     scale: int,
     dry_run: bool,
-    csv_dir: Path | None,
-    solo_faltantes: bool,
-    anios_por_lote: int = 10,
+    solo_lanzar: bool,
+    limpiar_asset: bool,
 ) -> tuple[bool, str]:
-    class_id = ruta_clasificacion(region_id, version)
-    print(f"\n=== Región {region_id} V{version}")
-    print(f"  clasificación: {class_id}")
+    class_path = ruta_clasificacion(region_id, version)
+    print(f"\n=== Región {region_id} V{version}", flush=True)
+    print(f"  clasificación: {class_path}", flush=True)
 
-    image = ee.Image(class_id)
+    image = ee.Image(class_path)
     try:
+        # Único getInfo ligero (como nameDescript = descServer.getInfo() en el JS)
         desc = image.get("descripcion").getInfo() or f"v{version}"
     except Exception as exc:
-        return False, f"No se pudo leer imagen ({exc})"
+        return False, f"No se pudo leer imagen/descripcion ({exc})"
 
-    asset_stats = asset_id_stats_local(region_id, version, desc)
-    print(f"  stats local ID: {asset_stats}")
-
-    if solo_faltantes and existe_stats_en_db(asset_stats):
-        print("  · ya hay stats en BD — omitido (--solo-faltantes)")
-        return True, "omitido"
+    asset_stats = asset_id_stats(region_id, version, desc)
+    file_name = f"STATS_R{region_id}_V{version}"
+    asset_desc = asset_stats.rsplit("/", 1)[-1]
+    print(f"  asset ESTADISTICAS: {asset_stats}", flush=True)
 
     if dry_run:
-        print("  · dry-run: no se calcula ni escribe")
+        print("  · dry-run: no se lanza Export", flush=True)
         return True, "dry-run"
 
-    try:
-        geo = geometria_region(region_id, regions_asset)
-        _ = geo.area(maxError=100).getInfo()
-    except Exception as exc:
-        return False, f"Región no encontrada / geometría ({exc})"
+    region_fc = region_feature(region_id, regions_asset)
+    region_geo = region_fc.geometry()
 
-    # Aunque la BD “crea” tener V7, el mapa GEE pudo cambiar: purgar y recalcular.
+    # Grafo server-side (sin evaluar reduceRegion en el cliente)
+    desc_ee = image.get("descripcion")
+    fc_raw = calculate_stats(
+        image, region_geo, int(version), desc_ee, year_min, year_max, scale=scale
+    )
+    fc_stats = normalizar_fc_ceros(fc_raw)
+
+    # Recalcular: borrar asset GEE previo si existe (toAsset falla si ya está)
+    borrar_asset_si_existe(asset_stats)
     n_old = purgar_stats_locales_region_version(region_id, version)
     if n_old > 0:
-        print(f"  · purgadas {n_old} entradas locales previas de R{region_id}_V{version}*")
-    print(
-        f"  RECALCULANDO desde clasificación actual "
-        f"({years.start}–{years.stop - 1}, scale={scale})…"
-    )
-    t0 = time.time()
-    filas = calcular_stats_por_anio(
-        image, geo, years, scale=scale, anios_por_lote=anios_por_lote
-    )
-    filas = normalizar_columnas(filas)
-    print(f"  {len(filas)} años en {time.time() - t0:.1f}s")
+        print(f"  · purgadas {n_old} entradas locales previas", flush=True)
 
-    if not filas:
-        return False, "sin filas (¿bandas classification_YYYY ausentes?)"
+    print("  · lanzando Export.table.toAsset (async GEE)…", flush=True)
+    try:
+        task = lanzar_export(fc_stats, asset_desc or file_name, asset_stats)
+    except Exception as exc:
+        return False, f"No se pudo iniciar Export ({exc})"
+
+    if solo_lanzar:
+        print("  · --solo-lanzar: no se espera ni escribe SQLite", flush=True)
+        return True, "lanzado"
+
+    if not esperar_tarea(task, asset_desc):
+        return False, "Export falló"
 
     bioma = bioma_de_region(region_id, regions_asset)
-    if not escribir_sqlite(asset_stats, str(region_id), bioma, filas):
-        return False, "error escribiendo SQLite"
+    ok, n_rows = escribir_sqlite_desde_gee_asset(asset_stats, str(region_id), bioma)
+    if not ok:
+        return False, "Export OK pero no se pudo leer/escribir en SQLite"
 
-    if csv_dir is not None:
-        out = csv_dir / f"STATS_R{region_id}_V{version}.csv"
-        escribir_csv(
-            out,
-            filas,
-            {
-                "version": int(version),
-                "descripcion": desc,
-                "region_id": str(region_id),
-            },
-        )
-        print(f"  CSV → {out}")
+    if limpiar_asset:
+        borrar_asset_si_existe(asset_stats)
+        print("  · asset GEE eliminado tras volcar a SQLite", flush=True)
 
-    print("  OK → SQLite (stats actualizadas)")
+    print(f"  OK → SQLite ({n_rows} filas)", flush=True)
     return True, "ok"
 
 
@@ -467,9 +377,7 @@ def pares_desde_asset_final() -> list[tuple[str, int]]:
     vistos: set[tuple[str, int]] = set()
     for lab in labels:
         p = parse_asset_final(lab)
-        if not p:
-            continue
-        if p in vistos:
+        if not p or p in vistos:
             continue
         vistos.add(p)
         pares.append(p)
@@ -478,64 +386,42 @@ def pares_desde_asset_final() -> list[tuple[str, int]]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Calcula estadísticas Col.4 en local (SQLite/CSV), sin toAsset."
+        description=(
+            "Stats Col.4 como el JS: Export.table.toAsset async → SQLite. "
+            "No usa getInfo del reduceRegion."
+        )
     )
-    p.add_argument("--region", type=str, help="ID de región (ej. 30477)")
-    p.add_argument(
-        "--versions",
-        type=str,
-        default="",
-        help="Versiones separadas por coma (ej. 1,12). Con --region.",
-    )
-    p.add_argument(
-        "--desde-asset-final",
-        action="store_true",
-        help=f"Procesa todos los pares del Excel de avance ({AVANCE_COLOMBIA_XLSX.name})",
-    )
+    p.add_argument("--region", type=str)
+    p.add_argument("--versions", type=str, default="")
+    p.add_argument("--desde-asset-final", action="store_true")
     p.add_argument("--year-min", type=int, default=1985)
     p.add_argument("--year-max", type=int, default=2026)
     p.add_argument("--scale", type=int, default=30)
-    p.add_argument(
-        "--anios-por-lote",
-        type=int,
-        default=10,
-        help="Años por cada getInfo a GEE (default 10). Usa 0 para un solo lote de todos los años.",
-    )
-    p.add_argument(
-        "--regions-asset",
-        default=ASSET_REGIONES,
-        help="FeatureCollection de regiones",
-    )
-    p.add_argument("--project", default=None, help="GCP project para ee.Initialize")
+    p.add_argument("--regions-asset", default=ASSET_REGIONES)
+    p.add_argument("--project", default=None)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument(
-        "--solo-faltantes",
+        "--solo-lanzar",
         action="store_true",
-        help=(
-            "NO recomendado si el mapa pudo cambiar: omite región+versión "
-            "que ya tengan filas en stats. Por defecto SIEMPRE se recalcula."
-        ),
+        help="Solo arranca Exports en GEE (rápido); no espera ni escribe SQLite",
     )
     p.add_argument(
-        "--csv-dir",
-        type=Path,
-        default=None,
-        help="Si se indica, también escribe CSV por versión",
+        "--limpiar-asset",
+        action="store_true",
+        help="Tras volcar a SQLite, borra el asset en ESTADISTICAS",
     )
     return p.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    years = range(args.year_min, args.year_max + 1)
 
-    pares: list[tuple[str, int]] = []
     if args.desde_asset_final:
         if not AVANCE_COLOMBIA_XLSX.is_file():
-            print(f"No está el Excel de avance: {AVANCE_COLOMBIA_XLSX}", file=sys.stderr)
+            print(f"No está el Excel: {AVANCE_COLOMBIA_XLSX}", file=sys.stderr)
             return 2
         pares = pares_desde_asset_final()
-        print(f"Asset Final: {len(pares)} pares región-versión")
+        print(f"Asset Final: {len(pares)} pares región-versión", flush=True)
     elif args.region and args.versions:
         vers = [int(x.strip()) for x in args.versions.split(",") if x.strip()]
         pares = [(str(args.region), v) for v in vers]
@@ -551,28 +437,96 @@ def main(argv: list[str] | None = None) -> int:
         ok, msg = procesar_uno(
             rid,
             ver,
-            years=years,
+            year_min=args.year_min,
+            year_max=args.year_max,
             regions_asset=args.regions_asset,
             scale=args.scale,
             dry_run=args.dry_run,
-            csv_dir=args.csv_dir,
-            solo_faltantes=args.solo_faltantes,
-            anios_por_lote=args.anios_por_lote,
+            solo_lanzar=args.solo_lanzar,
+            limpiar_asset=args.limpiar_asset,
         )
-        if msg in ("omitido", "dry-run"):
+        if msg in ("dry-run", "lanzado"):
             skip_n += 1
         elif ok:
             ok_n += 1
         else:
             fail_n += 1
             fallidos.append(f"COLOMBIA-{rid}-{ver}: {msg}")
-            print(f"  FAIL: {msg}")
+            print(f"  FAIL: {msg}", flush=True)
 
-    print("\n========== RESUMEN ==========")
-    print(f"OK={ok_n}  omitidos/dry={skip_n}  fallidos={fail_n}")
+    print("\n========== RESUMEN ==========", flush=True)
+    print(f"OK={ok_n}  lanzados/dry={skip_n}  fallidos={fail_n}", flush=True)
     for f in fallidos[:40]:
-        print(" ", f)
+        print(" ", f, flush=True)
     return 0 if fail_n == 0 else 1
+
+
+# --- helpers usados por tests unitarios ---
+def asset_id_stats_local(region_id, version, descripcion):
+    return asset_id_stats(region_id, version, descripcion)
+
+
+def _id_columna(class_id: int) -> str:
+    return f"ID{class_id:02d}" if class_id < 100 else f"ID{class_id}"
+
+
+def normalizar_columnas(filas: list[dict]) -> list[dict]:
+    keys: set[str] = set()
+    for f in filas:
+        keys.update(k for k in f if k != "year")
+    out = []
+    for f in filas:
+        full = {k: 0.0 for k in keys}
+        full.update(f)
+        full["year"] = int(f["year"])
+        out.append(full)
+    return out
+
+
+def filas_a_stats_rows(asset_id: str, filas: list[dict]) -> list[tuple]:
+    rows = []
+    for f in filas:
+        year = normalize_year(f.get("year"))
+        if year is None:
+            continue
+        for k, v in f.items():
+            if k == "year":
+                continue
+            try:
+                rows.append((asset_id, int(year), str(k).split("_")[0], float(v)))
+            except (TypeError, ValueError):
+                continue
+    return rows
+
+
+def _fc_a_filas(fc_info: dict) -> list[dict]:
+    """Compat tests: propiedades IDxx o groups."""
+    filas = []
+    for feat in fc_info.get("features") or []:
+        props = feat.get("properties") or {}
+        year = normalize_year(props.get("year"))
+        if year is None:
+            continue
+        if props.get("groups") is not None:
+            fila = {"year": int(year)}
+            for item in props["groups"]:
+                try:
+                    fila[_id_columna(int(item["class"]))] = float(item["sum"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if len(fila) > 1:
+                filas.append(fila)
+            continue
+        fila = {"year": int(year)}
+        for k, v in props.items():
+            if str(k).upper().startswith("ID"):
+                try:
+                    fila[str(k)] = float(v)
+                except (TypeError, ValueError):
+                    continue
+        if len(fila) > 1:
+            filas.append(fila)
+    return filas
 
 
 if __name__ == "__main__":
