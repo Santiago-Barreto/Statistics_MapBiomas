@@ -1,13 +1,17 @@
 """Tests unitarios del cálculo local de estadísticas (sin GEE)."""
 
+import sqlite3
+
 from scripts.calcular_estadisticas_local import (
     asset_id_stats_local,
     filas_a_stats_rows,
     normalizar_columnas,
     ruta_clasificacion,
+    _fc_a_filas,
     _id_columna,
 )
 from config import ASSET_PARENT, BASE_PATH_V1, BASE_PATH_VX
+from tests.conftest import _bootstrap_schema
 
 
 def test_ruta_clasificacion_v1_vs_filtros():
@@ -46,12 +50,26 @@ def test_filas_a_stats_rows():
     assert ("projects/x/R1_V1", 2020, "ID21", 1.0) in rows
 
 
-def test_purgar_stats_locales_region_version(tmp_path, monkeypatch):
-    import sqlite3
+def test_fc_a_filas_con_groups():
+    info = {
+        "features": [
+            {
+                "properties": {
+                    "year": 2000,
+                    "groups": [
+                        {"class": 3, "sum": 10.5},
+                        {"class": 21, "sum": 2.0},
+                    ],
+                }
+            }
+        ]
+    }
+    filas = _fc_a_filas(info)
+    assert filas == [{"year": 2000, "ID03": 10.5, "ID21": 2.0}]
 
-    from config import ASSET_PARENT
+
+def test_purgar_stats_locales_region_version(tmp_path, monkeypatch):
     from scripts import calcular_estadisticas_local as mod
-    from tests.conftest import _bootstrap_schema
 
     db_path = str(tmp_path / "purge_rv.db")
     monkeypatch.setattr("data.db.DB_PATH", db_path)

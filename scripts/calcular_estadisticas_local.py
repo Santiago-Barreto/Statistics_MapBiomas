@@ -100,59 +100,140 @@ def _id_columna(class_id: int) -> str:
     return f"ID{class_id:02d}" if class_id < 100 else f"ID{class_id}"
 
 
+def _groups_a_fila(year: int, groups) -> dict | None:
+    if not groups:
+        return None
+    fila: dict = {"year": int(year)}
+    for item in groups:
+        try:
+            cid = int(item["class"])
+            area = float(item["sum"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        fila[_id_columna(cid)] = area
+    return fila if len(fila) > 1 else None
+
+
+def _fc_stats_server(
+    image: ee.Image,
+    region_geo: ee.Geometry,
+    years: list[int],
+    scale: int,
+) -> ee.FeatureCollection:
+    """Misma idea que calculateStats del JS: reduceRegion en el servidor por año."""
+    years_ee = ee.List([int(y) for y in years])
+    img = image
+    geo = region_geo
+    sc = ee.Number(int(scale))
+
+    def _por_anio(y):
+        y = ee.Number(y)
+        band = ee.String("classification_").cat(y.format("%d"))
+        img_year = img.select([band]).int16().selfMask()
+        area_img = ee.Image.pixelArea().divide(1e4).addBands(img_year)
+        result = area_img.reduceRegion(
+            reducer=ee.Reducer.sum().group(groupField=1, groupName="class"),
+            geometry=geo,
+            scale=sc,
+            maxPixels=1e13,
+            bestEffort=True,
+            tileScale=4,
+        )
+        feat = ee.Feature(
+            ee.Geometry.Point([0, 0]),
+            ee.Dictionary(result).set("year", y),
+        )
+        return ee.Algorithms.If(img.bandNames().contains(band), feat, None)
+
+    return ee.FeatureCollection(years_ee.map(_por_anio, True))
+
+
+def _fc_a_filas(fc_info: dict) -> list[dict]:
+    filas: list[dict] = []
+    for feat in fc_info.get("features") or []:
+        props = feat.get("properties") or {}
+        year = normalize_year(props.get("year"))
+        if year is None:
+            continue
+        groups = props.get("groups")
+        if groups is not None:
+            fila = _groups_a_fila(int(year), groups)
+            if fila:
+                filas.append(fila)
+            continue
+        fila = {"year": int(year)}
+        for k, v in props.items():
+            if k in ("year", "groups", "system:index", "version", "descripcion"):
+                continue
+            if str(k).upper().startswith("ID"):
+                try:
+                    fila[str(k)] = float(v)
+                except (TypeError, ValueError):
+                    continue
+        if len(fila) > 1:
+            filas.append(fila)
+    return filas
+
+
 def calcular_stats_por_anio(
     image: ee.Image,
     region_geo: ee.Geometry,
     years: range,
     scale: int = 30,
+    anios_por_lote: int = 10,
 ) -> list[dict]:
     """
-    Área (ha) por clase y año. Un reduceRegion por año (más robusto que un
-    getInfo gigante de toda la FeatureCollection).
+    Calcula áreas en GEE por lotes (default 10 años / 1 getInfo).
+
+    El modo anterior (1 getInfo por año) era demasiado lento frente al Export del JS.
     """
-    bandas = set(image.bandNames().getInfo() or [])
+    years_list = [int(y) for y in years]
+    if not years_list:
+        return []
+
+    lote = len(years_list) if anios_por_lote <= 0 else max(1, int(anios_por_lote))
     filas: list[dict] = []
 
-    for y in years:
-        band = f"classification_{y}"
-        if band not in bandas:
-            continue
-
-        img_year = image.select(band).int16().selfMask()
-        area_img = ee.Image.pixelArea().divide(1e4).addBands(img_year)
-        groups = area_img.reduceRegion(
-            reducer=ee.Reducer.sum().group(groupField=1, groupName="class"),
-            geometry=region_geo,
-            scale=scale,
-            maxPixels=1e13,
-            bestEffort=True,
-            tileScale=4,
-        ).get("groups")
-
-        raw_groups = None
+    for i in range(0, len(years_list), lote):
+        chunk = years_list[i : i + lote]
+        print(
+            f"  · lote {chunk[0]}–{chunk[-1]} ({len(chunk)} años, 1 llamada GEE)…",
+            flush=True,
+        )
+        fc = _fc_stats_server(image, region_geo, chunk, scale)
+        info = None
         for intento in range(REINTENTOS):
             try:
-                raw_groups = groups.getInfo()
+                t0 = time.time()
+                info = fc.getInfo()
+                print(f"    listo en {time.time() - t0:.1f}s", flush=True)
                 break
             except Exception as exc:
-                if intento == REINTENTOS - 1:
-                    print(f"  ! año {y} falló: {exc}")
-                    raw_groups = None
+                print(
+                    f"    intento {intento + 1}/{REINTENTOS} falló: {exc}",
+                    flush=True,
+                )
+                if intento == REINTENTOS - 1 and len(chunk) > 1:
+                    mitad = max(1, len(chunk) // 2)
+                    print(
+                        f"    · reintentando en sub-lotes de {mitad}…",
+                        flush=True,
+                    )
+                    filas.extend(
+                        calcular_stats_por_anio(
+                            image,
+                            region_geo,
+                            range(chunk[0], chunk[-1] + 1),
+                            scale=scale,
+                            anios_por_lote=mitad,
+                        )
+                    )
+                    info = None
                 else:
-                    time.sleep(PAUSA_SEG * (intento + 1))
+                    time.sleep(PAUSA_SEG * (intento + 1) * 2)
 
-        if not raw_groups:
-            continue
-
-        fila: dict = {"year": int(y)}
-        for item in raw_groups:
-            try:
-                cid = int(item["class"])
-                area = float(item["sum"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            fila[_id_columna(cid)] = area
-        filas.append(fila)
+        if info is not None:
+            filas.extend(_fc_a_filas(info))
 
     return filas
 
@@ -312,6 +393,7 @@ def procesar_uno(
     dry_run: bool,
     csv_dir: Path | None,
     solo_faltantes: bool,
+    anios_por_lote: int = 10,
 ) -> tuple[bool, str]:
     class_id = ruta_clasificacion(region_id, version)
     print(f"\n=== Región {region_id} V{version}")
@@ -349,7 +431,9 @@ def procesar_uno(
         f"({years.start}–{years.stop - 1}, scale={scale})…"
     )
     t0 = time.time()
-    filas = calcular_stats_por_anio(image, geo, years, scale=scale)
+    filas = calcular_stats_por_anio(
+        image, geo, years, scale=scale, anios_por_lote=anios_por_lote
+    )
     filas = normalizar_columnas(filas)
     print(f"  {len(filas)} años en {time.time() - t0:.1f}s")
 
@@ -412,6 +496,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--year-max", type=int, default=2026)
     p.add_argument("--scale", type=int, default=30)
     p.add_argument(
+        "--anios-por-lote",
+        type=int,
+        default=10,
+        help="Años por cada getInfo a GEE (default 10). Usa 0 para un solo lote de todos los años.",
+    )
+    p.add_argument(
         "--regions-asset",
         default=ASSET_REGIONES,
         help="FeatureCollection de regiones",
@@ -467,6 +557,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             csv_dir=args.csv_dir,
             solo_faltantes=args.solo_faltantes,
+            anios_por_lote=args.anios_por_lote,
         )
         if msg in ("omitido", "dry-run"):
             skip_n += 1
