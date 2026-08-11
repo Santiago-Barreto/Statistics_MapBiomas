@@ -68,6 +68,17 @@ def test_fc_a_filas_con_groups():
     assert filas == [{"year": 2000, "ID03": 10.5, "ID21": 2.0}]
 
 
+def test_es_solo_estadistica_gee():
+    from scripts.calcular_estadisticas_local import _es_solo_estadistica_gee
+    from config import ASSET_PARENT, BASE_PATH_VX
+
+    parent = ASSET_PARENT.rstrip("/")
+    assert _es_solo_estadistica_gee(f"{parent}/R30484_V7-filtro-espacial")
+    assert not _es_solo_estadistica_gee(f"{BASE_PATH_VX.rstrip('/')}/COLOMBIA-30484-7")
+    assert not _es_solo_estadistica_gee(parent)
+    assert not _es_solo_estadistica_gee(f"{parent}/")
+
+
 def test_purgar_stats_locales_region_version(tmp_path, monkeypatch):
     from scripts import calcular_estadisticas_local as mod
 

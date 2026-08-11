@@ -2,21 +2,18 @@
 """
 Cálculo de estadísticas Col. 4 — mismo flujo que el tool JS EXPORT-STATS.
 
-NO usa getInfo() para el reduceRegion (eso se cuelga). Hace:
+Si ya existe la estadística en GEE (tabla bajo ESTADISTICAS), se ELIMINA solo
+esa estadística (nunca la clasificación) y se vuelve a Export.table.toAsset.
 
-  1) FeatureCollection server-side (calculateStats + ceros), igual que el JS
-  2) ee.batch.Export.table.toAsset → ESTADISTICAS (tarea async en GEE)
-  3) Espera la tarea
-  4) Lee el asset y lo vuelca a SQLite local
+  1) FeatureCollection server-side (como calculateStats del JS)
+  2) Borra R{reg}_V{ver}* en ESTADISTICAS (si hay)
+  3) Export.table.toAsset async
+  4) Espera + vuelca a SQLite
 
-Uso (rama local):
+Uso:
 
     python scripts/calcular_estadisticas_local.py --region 30477 --versions 12
     python scripts/calcular_estadisticas_local.py --desde-asset-final
-    python scripts/calcular_estadisticas_local.py --desde-asset-final --dry-run
-
-    # Solo lanza Exports (como el Code Editor) y no espera / no escribe SQLite:
-    python scripts/calcular_estadisticas_local.py --desde-asset-final --solo-lanzar
 """
 
 from __future__ import annotations
@@ -169,12 +166,101 @@ def normalizar_fc_ceros(fc_raw: ee.FeatureCollection) -> ee.FeatureCollection:
     return fc_raw.map(_fill)
 
 
-def borrar_asset_si_existe(asset_id: str) -> None:
+def _es_solo_estadistica_gee(asset_id: str) -> bool:
+    """True solo para hojas bajo ESTADISTICAS (nunca clasificación/metadata)."""
+    aid = (asset_id or "").strip().rstrip("/")
+    prefijo = ASSET_PARENT.rstrip("/") + "/"
+    if not aid.startswith(prefijo):
+        return False
+    leaf = aid[len(prefijo) :]
+    if "/" in leaf or not leaf:
+        return False
+    # R30484_V7-filtro-espacial  /  R30484_V7
+    return bool(re.match(r"^R\d+[_-]V\d+", leaf, re.IGNORECASE))
+
+
+_STATS_GEE_CACHE: list[str] | None = None
+
+
+def _listar_ids_estadisticas_gee(*, force: bool = False) -> list[str]:
+    global _STATS_GEE_CACHE
+    if _STATS_GEE_CACHE is not None and not force:
+        return _STATS_GEE_CACHE
+    parent = ASSET_PARENT.rstrip("/")
+    ids: list[str] = []
+    page_token = None
+    while True:
+        req: dict = {"parent": parent}
+        if page_token:
+            req["pageToken"] = page_token
+        resp = ee.data.listAssets(req)
+        for a in resp.get("assets") or []:
+            aid = a.get("id")
+            if aid and _es_solo_estadistica_gee(aid):
+                ids.append(aid)
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    _STATS_GEE_CACHE = ids
+    return ids
+
+
+def stats_gee_de_region_version(region_id: int | str, version: int) -> list[str]:
+    """Assets ESTADISTICAS existentes para R{región}_V{versión}* (cualquier sufijo)."""
+    rid = str(region_id)
+    ver = int(version)
+    pat = re.compile(
+        rf"^R0*{re.escape(rid)}[_-]V0*{ver}(?:$|[_-].*)$",
+        re.IGNORECASE,
+    )
+    out = []
+    for aid in _listar_ids_estadisticas_gee():
+        leaf = aid.rsplit("/", 1)[-1]
+        if pat.match(leaf):
+            out.append(aid)
+    return out
+
+
+def borrar_estadisticas_gee_region_version(
+    region_id: int | str, version: int
+) -> tuple[list[str], list[str]]:
+    """
+    Elimina SOLO assets de estadísticas (tabla) de esa región+versión.
+    No toca clasificación ni metadata.
+    Returns (borrados_ok, errores).
+    """
+    global _STATS_GEE_CACHE
+    candidatos = stats_gee_de_region_version(region_id, version)
+    ok: list[str] = []
+    errores: list[str] = []
+    for aid in candidatos:
+        if not _es_solo_estadistica_gee(aid):
+            errores.append(f"bloqueado(no-stats): {aid}")
+            continue
+        try:
+            ee.data.deleteAsset(aid)
+            ok.append(aid)
+            print(f"  · estadística GEE eliminada: {aid.rsplit('/', 1)[-1]}", flush=True)
+        except Exception as exc:
+            msg = str(exc)
+            if any(x in msg.lower() for x in ("not found", "does not exist", "404")):
+                ok.append(aid)
+                print(f"  · ya no existía: {aid.rsplit('/', 1)[-1]}", flush=True)
+            else:
+                errores.append(f"{aid.rsplit('/', 1)[-1]}: {exc}")
+                print(f"  · ERROR borrando estadística: {exc}", flush=True)
+    if ok and _STATS_GEE_CACHE is not None:
+        dead = set(ok)
+        _STATS_GEE_CACHE = [a for a in _STATS_GEE_CACHE if a not in dead]
+    return ok, errores
+
+
+def asset_existe(asset_id: str) -> bool:
     try:
-        ee.data.deleteAsset(asset_id)
-        print(f"  · asset GEE previo borrado: {asset_id.rsplit('/', 1)[-1]}", flush=True)
+        ee.data.getAsset(asset_id)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def esperar_tarea(task: ee.batch.Task, etiqueta: str) -> bool:
@@ -339,11 +425,30 @@ def procesar_uno(
     )
     fc_stats = normalizar_fc_ceros(fc_raw)
 
-    # Recalcular: borrar asset GEE previo si existe (toAsset falla si ya está)
-    borrar_asset_si_existe(asset_stats)
+    # Recalcular: borrar SOLO estadísticas GEE de esa región+versión (no la clasificación)
+    print(
+        f"  · buscando estadísticas GEE previas R{region_id}_V{version}* …",
+        flush=True,
+    )
+    borrados, err_del = borrar_estadisticas_gee_region_version(region_id, version)
+    if not borrados and not err_del:
+        print("  · no había estadísticas GEE previas", flush=True)
+    if err_del:
+        return False, f"No se pudieron borrar estadísticas previas: {'; '.join(err_del)}"
+
+    # Por si el destino exacto sigue ahí (carrera / nombre distinto)
+    if asset_existe(asset_stats):
+        if not _es_solo_estadistica_gee(asset_stats):
+            return False, f"Destino no es estadística (abortado): {asset_stats}"
+        try:
+            ee.data.deleteAsset(asset_stats)
+            print(f"  · eliminado destino exacto: {asset_desc}", flush=True)
+        except Exception as exc:
+            return False, f"Existe y no se pudo borrar antes de Export: {exc}"
+
     n_old = purgar_stats_locales_region_version(region_id, version)
     if n_old > 0:
-        print(f"  · purgadas {n_old} entradas locales previas", flush=True)
+        print(f"  · purgadas {n_old} entradas locales previas (SQLite)", flush=True)
 
     print("  · lanzando Export.table.toAsset (async GEE)…", flush=True)
     try:
@@ -364,8 +469,12 @@ def procesar_uno(
         return False, "Export OK pero no se pudo leer/escribir en SQLite"
 
     if limpiar_asset:
-        borrar_asset_si_existe(asset_stats)
-        print("  · asset GEE eliminado tras volcar a SQLite", flush=True)
+        if _es_solo_estadistica_gee(asset_stats):
+            try:
+                ee.data.deleteAsset(asset_stats)
+                print("  · estadística GEE eliminada tras volcar a SQLite", flush=True)
+            except Exception as exc:
+                print(f"  · aviso: no se pudo limpiar asset tras leer: {exc}", flush=True)
 
     print(f"  OK → SQLite ({n_rows} filas)", flush=True)
     return True, "ok"
