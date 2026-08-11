@@ -11,6 +11,7 @@ from data.db import (
     get_conn,
     insert_assets_upsert_sql,
     insert_stats_upsert_sql,
+    ph,
     ph_join,
     upsert_control_sincro_sql,
 )
@@ -253,3 +254,139 @@ def sincronizar_todo_interno():
     if not ok:
         return 0, "", False
     return len(nombres_nuevos), ", ".join(nombres_nuevos), True
+
+
+def _prefijo_stats() -> str:
+    return ASSET_PARENT.rstrip("/") + "/"
+
+
+def purgar_assets_fuera_de_parent() -> int:
+    """
+    Elimina de la BD local assets/stats que no pertenecen a ASSET_PARENT
+    (p. ej. copias en ee-my-andesnorte / STATISTICS_GENERAL).
+    """
+    prefijo = _prefijo_stats()
+
+    def _borrar():
+        c = get_conn()
+        try:
+            cur = c.cursor()
+            cur.execute(
+                f"SELECT asset_id FROM assets WHERE asset_id NOT LIKE {ph()}",
+                (f"{prefijo}%",),
+            )
+            ajenos = [r[0] for r in cur.fetchall()]
+            if not ajenos:
+                return 0
+            phs = ph_join(len(ajenos))
+            cur.execute(f"DELETE FROM stats WHERE asset_id IN ({phs})", ajenos)
+            cur.execute(f"DELETE FROM assets WHERE asset_id IN ({phs})", ajenos)
+            c.commit()
+            return len(ajenos)
+        except DB_OPERATIONAL_ERRORS:
+            c.rollback()
+            return -1
+        finally:
+            c.close()
+
+    from data.db import with_sqlite_retry
+
+    try:
+        return with_sqlite_retry(_borrar)
+    except DB_OPERATIONAL_ERRORS:
+        return -1
+
+
+def reexportar_todas_estadisticas():
+    """
+    Re-descarga desde GEE todas las estadísticas de ASSET_PARENT y
+    sobrescribe la tabla stats local. No usa otros proyectos.
+
+    Returns
+    -------
+    dict con keys: ok, n_assets, n_con_stats, n_fallidos, n_purgados, detalle_fallidos
+    """
+    resultado = {
+        "ok": False,
+        "n_assets": 0,
+        "n_con_stats": 0,
+        "n_fallidos": 0,
+        "n_purgados": 0,
+        "detalle_fallidos": [],
+    }
+
+    n_purgados = purgar_assets_fuera_de_parent()
+    if n_purgados < 0:
+        return resultado
+    resultado["n_purgados"] = n_purgados
+
+    try:
+        remote_assets = ee.data.listAssets({"parent": ASSET_PARENT}).get("assets", [])
+    except Exception:
+        return resultado
+
+    remote_ids = [a.get("id") for a in remote_assets if a.get("id")]
+    resultado["n_assets"] = len(remote_ids)
+    if not remote_ids:
+        resultado["ok"] = True
+        return resultado
+
+    try:
+        bioma_mapping_raw = ee.FeatureCollection(ASSET_REGIONES).reduceColumns(
+            ee.Reducer.toList().repeat(2), ["id_regionC", "bioma"]
+        ).getInfo()
+    except Exception:
+        bioma_mapping_raw = {"list": [[], []]}
+
+    listas = bioma_mapping_raw.get("list", [[], []])
+    bioma_dict = dict(zip([str(x) for x in listas[0]], listas[1]))
+
+    stats_por_asset: dict[str, list] = {}
+    fallidos: list[str] = []
+    for a_id in remote_ids:
+        raw = leer_stats_procesadas(a_id)
+        if raw:
+            stats_por_asset[a_id] = raw
+        else:
+            fallidos.append(a_id.rsplit("/", 1)[-1])
+
+    ahora = int(time.time())
+    filas_assets = []
+    for a_id in remote_ids:
+        label = a_id.split("/")[-1]
+        label_norm = label.replace("-", "_")
+        region_id = label_norm.split("_V")[0].replace("R", "")
+        bioma = bioma_dict.get(region_id, "Sin Bioma")
+        filas_assets.append((a_id, region_id, bioma, label, ahora))
+
+    def _escribir():
+        c = get_conn()
+        try:
+            cur = c.cursor()
+            cur.executemany(insert_assets_upsert_sql(), filas_assets)
+            for a_id, raw_data in stats_por_asset.items():
+                # Reemplazar stats del asset (reexport limpio)
+                cur.execute(f"DELETE FROM stats WHERE asset_id = {ph()}", (a_id,))
+                rows_cob = _construir_rows_stats(a_id, raw_data)
+                if rows_cob:
+                    cur.executemany(insert_stats_upsert_sql(), rows_cob)
+            c.commit()
+            return True
+        except DB_OPERATIONAL_ERRORS:
+            c.rollback()
+            return False
+        finally:
+            c.close()
+
+    from data.db import with_sqlite_retry
+
+    try:
+        ok = with_sqlite_retry(_escribir)
+    except DB_OPERATIONAL_ERRORS:
+        return resultado
+
+    resultado["ok"] = bool(ok)
+    resultado["n_con_stats"] = len(stats_por_asset)
+    resultado["n_fallidos"] = len(fallidos)
+    resultado["detalle_fallidos"] = fallidos[:30]
+    return resultado

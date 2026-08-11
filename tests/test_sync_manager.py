@@ -157,3 +157,104 @@ def test_chequeo_automatico_sincro_tolera_locked_en_control(monkeypatch):
     manager.chequeo_automatico_sincro()
 
     assert _ConnConBloqueo.intentos_global >= 2
+
+
+def test_purgar_assets_fuera_de_parent(monkeypatch, tmp_path: Path):
+    db_path = str(tmp_path / "purge.db")
+    _crear_schema_basico(db_path)
+    monkeypatch.setattr("data.db.DB_PATH", db_path)
+
+    parent = manager.ASSET_PARENT.rstrip("/")
+    conn = sqlite3.connect(db_path)
+    conn.executemany(
+        "INSERT INTO assets VALUES (?, ?, ?, ?, ?)",
+        [
+            (f"{parent}/R1_V1", "1", "Andes", "R1_V1", 0),
+            ("projects/ee-my-andesnorte/assets/STATISTICS/R1_V1", "1", "Andes", "R1_V1", 0),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO stats VALUES (?, ?, ?, ?)",
+        ("projects/ee-my-andesnorte/assets/STATISTICS/R1_V1", 2020, "ID03", 1.0),
+    )
+    conn.commit()
+    conn.close()
+
+    n = manager.purgar_assets_fuera_de_parent()
+    assert n == 1
+    conn = sqlite3.connect(db_path)
+    left = [r[0] for r in conn.execute("SELECT asset_id FROM assets").fetchall()]
+    n_stats = conn.execute("SELECT COUNT(*) FROM stats").fetchone()[0]
+    conn.close()
+    assert left == [f"{parent}/R1_V1"]
+    assert n_stats == 0
+
+
+def test_reexportar_todas_estadisticas(monkeypatch, tmp_path: Path):
+    db_path = str(tmp_path / "reexport.db")
+    _crear_schema_basico(db_path)
+    monkeypatch.setattr("data.db.DB_PATH", db_path)
+
+    parent = manager.ASSET_PARENT.rstrip("/")
+    aid = f"{parent}/R10_V2"
+
+    class _FakeEEData:
+        @staticmethod
+        def listAssets(payload):
+            if payload["parent"] == manager.ASSET_PARENT:
+                return {"assets": [{"id": aid}]}
+            return {"assets": []}
+
+    class _FakeReducer:
+        @staticmethod
+        def toList():
+            class _Repeat:
+                @staticmethod
+                def repeat(_):
+                    return None
+
+            return _Repeat()
+
+    class _FakeFeatureCollection:
+        def __init__(self, _):
+            pass
+
+        def reduceColumns(self, *_args, **_kwargs):
+            class _Result:
+                def getInfo(self):
+                    return {"list": [["10"], ["Andes"]]}
+
+            return _Result()
+
+    monkeypatch.setattr(manager.ee, "data", _FakeEEData)
+    monkeypatch.setattr(manager.ee, "Reducer", _FakeReducer)
+    monkeypatch.setattr(manager.ee, "FeatureCollection", _FakeFeatureCollection)
+    monkeypatch.setattr(
+        manager,
+        "leer_stats_procesadas",
+        lambda _aid: [{"year": 2019, "3": 42.0}],
+    )
+
+    # Basura de otro proyecto
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO assets VALUES (?, ?, ?, ?, ?)",
+        ("projects/otro/R99_V1", "99", "X", "R99_V1", 0),
+    )
+    conn.commit()
+    conn.close()
+
+    res = manager.reexportar_todas_estadisticas()
+    assert res["ok"] is True
+    assert res["n_assets"] == 1
+    assert res["n_con_stats"] == 1
+    assert res["n_purgados"] == 1
+
+    conn = sqlite3.connect(db_path)
+    assets = [r[0] for r in conn.execute("SELECT asset_id FROM assets").fetchall()]
+    area = conn.execute(
+        "SELECT area_ha FROM stats WHERE asset_id = ?", (aid,)
+    ).fetchone()[0]
+    conn.close()
+    assert assets == [aid]
+    assert area == 42.0

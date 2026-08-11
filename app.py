@@ -12,6 +12,7 @@ from gee.init import inicializar_gee
 from sync.manager import (
     hay_assets_sin_stats,
     rellenar_stats_faltantes_desde_gee,
+    reexportar_todas_estadisticas,
     sincronizar_todo_interno,
 )
 from data.processing import cargar_datos_totales, cargar_datos_bioma, cargar_aportes_regionales_bioma
@@ -126,7 +127,7 @@ def main():
     configurar_app()
     iniciar_servicios_una_vez()
 
-    # Rama local: no sync automático al abrir (evita database is locked / Stopping...).
+    # Rama local: sync / reexport solo bajo demanda (evita database is locked).
     if st.session_state.pop("forzar_sincro", False):
         with st.spinner("Sincronizando GEE → SQLite local…"):
             total, nombres, ok = sincronizar_todo_interno()
@@ -136,6 +137,25 @@ def main():
             st.success(f"Sync OK ({total} nuevos). {nombres}")
         else:
             st.error("Sync falló. Revisa GEE / permisos.")
+        st.session_state.ultima_sincro = True
+
+    if st.session_state.pop("forzar_reexport_stats", False):
+        with st.spinner(
+            "Reexportando todas las estadísticas desde GEE "
+            "(solo ESTADISTICAS MapBiomas; puede tardar)…"
+        ):
+            res = reexportar_todas_estadisticas()
+        if res.get("ok"):
+            st.success(
+                f"Reexport OK: {res['n_con_stats']}/{res['n_assets']} assets con stats. "
+                f"Purgados fuera de MapBiomas: {res['n_purgados']}."
+            )
+            if res.get("n_fallidos"):
+                with st.expander(f"⚠️ {res['n_fallidos']} assets sin datos en GEE"):
+                    for lab in res.get("detalle_fallidos") or []:
+                        st.text(lab)
+        else:
+            st.error("Reexport falló. Revisa GEE / permisos / SQLite.")
         st.session_state.ultima_sincro = True
 
     if "thumbnails" not in st.session_state:

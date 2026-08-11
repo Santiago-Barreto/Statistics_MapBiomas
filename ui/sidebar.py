@@ -32,6 +32,17 @@ def render_sidebar():
         if st.button("🔄 Sincronizar ahora", use_container_width=True):
             st.session_state.forzar_sincro = True
             st.rerun()
+        if st.button(
+            "♻️ Reexportar estadísticas GEE",
+            use_container_width=True,
+            help=(
+                "Vuelve a descargar TODAS las stats desde "
+                "mapbiomas-colombia/.../ESTADISTICAS y sobrescribe la BD local. "
+                "Elimina copias de otros proyectos. Puede tardar varios minutos."
+            ),
+        ):
+            st.session_state.forzar_reexport_stats = True
+            st.rerun()
         st.divider()
 
         _modo_keys = list(MODOS_APP.keys())

@@ -98,15 +98,16 @@ def parse_asset_final(label: str) -> tuple[str, int] | None:
 
 
 def _buscar_candidatos_stats(region_id: str, version: int) -> list[tuple[str, str]]:
-    """[(asset_id, bioma)] que coinciden R{region}_V{version}; prioriza ASSET_PARENT."""
+    """[(asset_id, bioma)] solo bajo ASSET_PARENT (sin otros proyectos GEE)."""
     conn = get_conn()
     cur = conn.cursor()
+    prefijo = _prefijo_stats()
     cur.execute(
         f"""
         SELECT asset_id, bioma FROM assets
-        WHERE region_id = {ph()}
+        WHERE region_id = {ph()} AND asset_id LIKE {ph()}
         """,
-        (str(region_id),),
+        (str(region_id), f"{prefijo}%"),
     )
     rows = cur.fetchall()
     conn.close()
@@ -115,20 +116,13 @@ def _buscar_candidatos_stats(region_id: str, version: int) -> list[tuple[str, st
         rf"^R0*{re.escape(str(region_id))}[_-]V0*{version}(?:$|[_-].*)$",
         re.IGNORECASE,
     )
-    prefijo = _prefijo_stats()
     hits: list[tuple[str, str]] = []
     for aid, bioma in rows:
         leaf = aid.rsplit("/", 1)[-1]
         if pat.match(leaf):
             hits.append((aid, bioma or ""))
 
-    def _rank(item: tuple[str, str]) -> tuple[int, int, int]:
-        aid, _ = item
-        bajo_parent = 0 if aid.startswith(prefijo) else 1
-        prio, length = _score_leaf(aid.rsplit("/", 1)[-1])
-        return (bajo_parent, prio, length)
-
-    hits.sort(key=_rank)
+    hits.sort(key=lambda t: _score_leaf(t[0].rsplit("/", 1)[-1]))
     return hits
 
 

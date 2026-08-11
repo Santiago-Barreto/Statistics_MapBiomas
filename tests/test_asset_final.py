@@ -49,22 +49,32 @@ def test_leer_asset_final_desde_xlsx(tmp_path):
 
 
 def test_resolver_assets_bioma_desde_avance(temp_db, tmp_path):
+    from config import ASSET_PARENT
     from data.db import get_conn
 
+    parent = ASSET_PARENT.rstrip("/")
     conn = get_conn()
     rows = [
         (
-            "projects/mapbiomas-colombia/assets/LULC/COLECCION4/ESTADISTICAS/R30205_V8-filtro-espacial",
+            f"{parent}/R30205_V8-filtro-espacial",
             "30205",
             "Amazonia",
             "R30205_V8-filtro-espacial",
             1,
         ),
         (
-            "projects/mapbiomas-colombia/assets/LULC/COLECCION4/ESTADISTICAS/R30102_V6-filtro-espacial",
+            f"{parent}/R30102_V6-filtro-espacial",
             "30102",
             "Andes",
             "R30102_V6-filtro-espacial",
+            1,
+        ),
+        (
+            # Otro proyecto: debe ignorarse
+            "projects/ee-my-andesnorte/assets/STATISTICS/R30205_V8-filtro-espacial",
+            "30205",
+            "Amazonia",
+            "R30205_V8-filtro-espacial",
             1,
         ),
     ]
@@ -89,28 +99,31 @@ def test_resolver_assets_bioma_desde_avance(temp_db, tmp_path):
     af_mod.leer_asset_final_desde_xlsx.cache_clear()
     res = resolver_assets_bioma_desde_avance("Amazonia", ruta_xlsx=path)
     assert len(res.asset_ids) == 1
-    assert "R30205_V8-filtro-espacial" in res.asset_ids[0]
+    assert res.asset_ids[0].startswith(parent)
+    assert "ee-my-andesnorte" not in res.asset_ids[0]
     assert "COLOMBIA-30999-1" in res.faltantes
     assert "COLOMBIA-30102-6" in res.fuera_bioma
     assert "NO-VALIDO" in res.invalidos
 
 
 def test_preferir_version_mayor_misma_region(temp_db, tmp_path):
+    from config import ASSET_PARENT
     from data.db import get_conn
 
+    parent = ASSET_PARENT.rstrip("/")
     conn = get_conn()
     conn.executemany(
         "INSERT INTO assets (asset_id, region_id, bioma, label, last_sync) VALUES (?,?,?,?,?)",
         [
             (
-                "projects/x/assets/ESTADISTICAS/R30205_V6-filtro-espacial",
+                f"{parent}/R30205_V6-filtro-espacial",
                 "30205",
                 "Amazonia",
                 "a",
                 1,
             ),
             (
-                "projects/x/assets/ESTADISTICAS/R30205_V8-filtro-espacial",
+                f"{parent}/R30205_V8-filtro-espacial",
                 "30205",
                 "Amazonia",
                 "b",
